@@ -9,6 +9,12 @@ export const HELPER_ADDRESS: string | undefined = import.meta.env.VITE_HELPER_AD
 export const LINK_TOKEN_ADDRESS: string | undefined = import.meta.env.VITE_LINK_TOKEN_ADDRESS as string | undefined
 export const MON_TOKEN_ADDRESS: string | undefined = undefined // native token on Monad
 
+console.log('📍 Contract Addresses Loaded:', {
+  FAUCET_ADDRESS,
+  HELPER_ADDRESS,
+  LINK_TOKEN_ADDRESS,
+})
+
 // Validate required addresses
 if (!FAUCET_ADDRESS) {
   throw new Error('FAUCET_ADDRESS environment variable is required')

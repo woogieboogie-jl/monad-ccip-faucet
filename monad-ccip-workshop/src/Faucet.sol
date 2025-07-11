@@ -72,6 +72,10 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
     // dispensablePool < dripRate * thresholdFactor.
     uint256 public thresholdFactor = 10; // default same logic as before (dripRate * 10 ~= 20%)
 
+    // Base drip rates set at deployment - these never change and represent the initial values
+    uint256 public BASEMONDRIPRATE;  // Initial MON drip rate from deployment
+    uint256 public BASELINKDRIPRATE; // Initial LINK drip rate from deployment
+
     /// @notice Emitted when the threshold factor is updated by the owner.
     event ThresholdFactorUpdated(uint256 newFactor);
     
@@ -132,6 +136,8 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         linkRes.dripRate = _initialLinkDrip;
         // REMOVED: _topUpNativeReservoir();
         // REMOVED: _topUpReservoir(linkRes, LINK, linkReservoirCapacity);
+        BASEMONDRIPRATE = _initialMonDrip;
+        BASELINKDRIPRATE = _initialLinkDrip;
     }
 
     // =============================================================

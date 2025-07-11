@@ -8,6 +8,7 @@ import { FAUCET_ADDRESS, HELPER_ADDRESS } from "@/lib/addresses"
 import { createPublicClient, http } from "viem"
 import { avalancheFuji } from "@/lib/chain"
 import { useBatchOperations } from "@/hooks/use-batch-operations"
+import { useTokenState } from "@/store/faucet-store"
 
 interface CCIPRefillState {
   status: "idle" | "wallet_pending" | "tx_pending" | "ccip_processing" | "success" | "failed" | "stuck"
@@ -109,6 +110,9 @@ export function useCCIPRefill(
   const { data: walletClient } = useWalletClient()
   const { batchContractStateCheck } = useBatchOperations()
   
+  // Get actual base drip amounts from the contract via Zustand store
+  const tokenState = useTokenState(tokenType)
+
   // OPTIMIZED: Use batched contract state check instead of individual calls
   const checkContractRefillStateOptimized = async (): Promise<boolean> => {
     try {
@@ -302,14 +306,14 @@ export function useCCIPRefill(
             const refillAmount = newBalance - currentTankBalance
 
             // Derive new drip amount by querying reservoir status or estimating via balance change
-            const baseAmount = tokenType === "mon" ? 10 : 100
+            const baseAmount = tokenState.baseDripAmount || (tokenType === "mon" ? 1 : 2) // Use actual base drip from contract, fallback for safety
             if (!publicClient) {
               console.error("publicClient unavailable while computing newDripAmount")
               return
             }
             const newDripAmount = await checkTankBalance(tokenType) > currentTankBalance ? tokenType === "mon" ? (await checkTankBalance("mon")) : (await checkTankBalance("link")) : baseAmount // fallback
 
-            const volatilityMultiplier = newDripAmount / baseAmount
+            const volatilityMultiplier = baseAmount > 0 ? newDripAmount / baseAmount : 1
 
             // Derive volatility score using inverse of mapping in Faucet.sol
             const minDrip = tokenType === "mon" ? 0.5 : 2

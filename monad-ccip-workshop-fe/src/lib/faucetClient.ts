@@ -12,14 +12,17 @@ const faucetAbi = parseAbi([
   // Global constants
   'function COOLDOWN() view returns (uint256)',
   'function thresholdFactor() view returns (uint256)',
+  // Base drip rates (deployment constants)
+  'function BASEMONDRIPRATE() view returns (uint256)',
+  'function BASELINKDRIPRATE() view returns (uint256)',
   // User-specific timestamps
   'function lastClaimMon(address) view returns (uint256)',
   'function lastClaimLink(address) view returns (uint256)'
 ])
 
 export interface FaucetSnapshot {
-  mon: { pool: bigint; drip: bigint }
-  link: { pool: bigint; drip: bigint }
+  mon: { pool: bigint; drip: bigint; baseDrip: bigint }
+  link: { pool: bigint; drip: bigint; baseDrip: bigint }
   treasury: { mon: bigint; link: bigint }
   constants: { cooldown: number; thresholdFactor: number }
   lastClaim?: { mon: bigint; link: bigint }
@@ -79,6 +82,44 @@ export async function getFaucetSnapshot(user?: `0x${string}`): Promise<FaucetSna
       [],
       5 * 60 * 1000 // 5 minutes
     ),
+    
+    // Base drip rates never change - very long cache (10 minutes)
+    // GRACEFUL FALLBACK: Handle old contracts that don't have these functions
+    cachedContractRead(
+      'BASEMONDRIPRATE',
+      async () => {
+        try {
+          return await publicClient.readContract({
+            address: FAUCET_ADDRESS as `0x${string}`,
+            abi: faucetAbi,
+            functionName: 'BASEMONDRIPRATE',
+          })
+        } catch (error) {
+          console.warn('BASEMONDRIPRATE not available (old contract), using fallback: 0.5 ether')
+          return BigInt('500000000000000000') // 0.5 ether as fallback
+        }
+      },
+      [],
+      10 * 60 * 1000 // 10 minutes
+    ),
+    
+    cachedContractRead(
+      'BASELINKDRIPRATE',
+      async () => {
+        try {
+          return await publicClient.readContract({
+            address: FAUCET_ADDRESS as `0x${string}`,
+            abi: faucetAbi,
+            functionName: 'BASELINKDRIPRATE',
+          })
+        } catch (error) {
+          console.warn('BASELINKDRIPRATE not available (old contract), using fallback: 5 ether')
+          return BigInt('5000000000000000000') // 5 ether as fallback
+        }
+      },
+      [],
+      10 * 60 * 1000 // 10 minutes
+    ),
   ]
 
   if (user) {
@@ -112,15 +153,15 @@ export async function getFaucetSnapshot(user?: `0x${string}`): Promise<FaucetSna
 
   const results = await Promise.all(calls)
 
-  const [reservoir, treasury, cooldownB, threshB, ...claims] = results
+  const [reservoir, treasury, cooldownB, threshB, baseMonDripB, baseLinkDripB, ...claims] = results
 
   const [monPool, monDrip, linkPool, linkDrip] = reservoir as [bigint, bigint, bigint, bigint]
   // FIXED: Properly destructure all 6 values from getTreasuryStatus: (monTreasury, monReservoir, linkTreasury, linkReservoir, monCapacity, linkCapacity)
   const [monTreasury, monReservoir, linkTreasury, linkReservoir, monCapacity, linkCapacity] = treasury as [bigint, bigint, bigint, bigint, bigint, bigint]
 
   return {
-    mon: { pool: monPool, drip: monDrip },
-    link: { pool: linkPool, drip: linkDrip },
+    mon: { pool: monPool, drip: monDrip, baseDrip: baseMonDripB as bigint },
+    link: { pool: linkPool, drip: linkDrip, baseDrip: baseLinkDripB as bigint },
     treasury: { mon: monTreasury, link: linkTreasury },
     constants: {
       cooldown: Number(cooldownB as bigint),

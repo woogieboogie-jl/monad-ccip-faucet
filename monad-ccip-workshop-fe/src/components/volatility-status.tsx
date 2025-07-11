@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { TrendingUp, TrendingDown, Info } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import { useGlobalCCIP } from "@/hooks/use-global-ccip"
+import { useTokenState } from "@/store/faucet-store"
 
 interface VolatilityStatusProps {
   volatility: {
@@ -19,6 +20,10 @@ interface VolatilityStatusProps {
 export function VolatilityStatus({ volatility, getVolatilityLevel, getDripMultiplier }: VolatilityStatusProps) {
   const { globalCCIP } = useGlobalCCIP()
   
+  // Get actual current drip amounts from the Zustand store for comparison
+  const monTokenState = useTokenState('mon')
+  const linkTokenState = useTokenState('link')
+  
   // Universal volatility affects both tokens equally
   const universalVolatility = globalCCIP.universalVolatility || {
     score: volatility.score,
@@ -29,12 +34,14 @@ export function VolatilityStatus({ volatility, getVolatilityLevel, getDripMultip
 
   // Calculate individual token adjustments based on universal volatility
   const getTokenAdjustment = (tokenType: "mon" | "link") => {
-    const baseAmount = tokenType === "mon" ? 10 : 100 // Base drip amounts
-    const adjustedAmount = Math.floor(baseAmount * universalVolatility.multiplier)
-    const change = ((adjustedAmount - baseAmount) / baseAmount) * 100
+    // Use actual base drip amounts from contract (stored in Zustand)
+    const tokenState = tokenType === "mon" ? monTokenState : linkTokenState
+    const baseAmount = tokenState.baseDripAmount || 0
+    const currentAmount = tokenState.currentDripAmount || 0
+    const change = baseAmount > 0 ? ((currentAmount - baseAmount) / baseAmount) * 100 : 0
     return {
       baseAmount,
-      adjustedAmount,
+      adjustedAmount: currentAmount,
       change,
       volatilityScore: universalVolatility.score,
       volatilityLevel: getVolatilityLevel(),

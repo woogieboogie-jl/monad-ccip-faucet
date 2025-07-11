@@ -104,11 +104,27 @@ export function useFaucet() {
         remainingLink = snap.lastClaim.link === 0n ? 0 : Math.max(0, snap.constants.cooldown - (nowSec - Number(snap.lastClaim.link)))
       }
 
-      // CONSOLIDATION: Update Zustand store directly instead of local state
+      // FIXED: Use actual base drip rates from contract instead of hardcoded values
+      const monBaseDripNum = Number(formatEther(snap.mon.baseDrip))
+      const linkBaseDripNum = Number(formatEther(snap.link.baseDrip))
+      
+      // Calculate actual volatility multipliers from contract data
+      const monMultiplier = monBaseDripNum > 0 ? monDripNum / monBaseDripNum : 1
+      const linkMultiplier = linkBaseDripNum > 0 ? linkDripNum / linkBaseDripNum : 1
+      
+      // Use average multiplier for global volatility (or could use MON as primary)
+      const globalMultiplier = (monMultiplier + linkMultiplier) / 2
+      
+      // Update global volatility state to match contract reality
+      updateVolatility({
+        multiplier: globalMultiplier,
+      })
+
+      // CONSOLIDATION: Update Zustand store with correct base vs current separation
       updateTokenState('mon', {
         tankBalance: monPoolNum,
-        baseDripAmount: monDripNum,
-        currentDripAmount: monDripNum,
+        baseDripAmount: monBaseDripNum,                     // ✅ True base from contract
+        currentDripAmount: monDripNum,                      // ✅ Current from contract
         lowTankThreshold: monDripNum * threshFactorNum,
         dripCooldownTime: remainingMon,
         contractAddress: MON_TOKEN_ADDRESS ?? '',
@@ -117,15 +133,23 @@ export function useFaucet() {
 
       updateTokenState('link', {
         tankBalance: linkPoolNum,
-        baseDripAmount: linkDripNum,
-        currentDripAmount: linkDripNum,
+        baseDripAmount: linkBaseDripNum,                    // ✅ True base from contract
+        currentDripAmount: linkDripNum,                     // ✅ Current from contract
         lowTankThreshold: linkDripNum * threshFactorNum,
         dripCooldownTime: remainingLink,
         contractAddress: LINK_TOKEN_ADDRESS ?? FAUCET_ADDRESS,
         maxTankBalance: linkTokenState.maxTankBalance || 500, // Preserve existing or default
       })
 
-      console.log('📊 Snapshot refreshed - updated Zustand store directly')
+      console.log('📊 Snapshot refreshed with contract-based base drip rates:', {
+        monBase: monBaseDripNum,
+        monCurrent: monDripNum,
+        monMultiplier: monMultiplier.toFixed(2),
+        linkBase: linkBaseDripNum,
+        linkCurrent: linkDripNum,
+        linkMultiplier: linkMultiplier.toFixed(2),
+        globalMultiplier: globalMultiplier.toFixed(2),
+      })
     } catch (error) {
       console.error('Failed to refresh snapshot:', error)
     }

@@ -3,6 +3,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { ArrowUpRight, ArrowDownLeft, ChevronDown, Info } from "lucide-react"
 import { formatBalance } from "@/lib/utils"
 import { useFaucet } from "@/hooks/use-faucet"
+import { useTokenState } from "@/store/faucet-store"
 import { useEffect, useRef } from "react"
 
 interface VolatilityProps {
@@ -16,15 +17,15 @@ interface VolatilityProps {
   getDripMultiplier: () => number
 }
 
-const BASE_DRIPS: Record<"mon" | "link", number> = {
-  mon: 10,
-  link: 100,
-}
-
 const getTrendIcon = (trend: "increasing" | "decreasing" | "stable") => {
-  if (trend === "increasing") return <ArrowUpRight className="h-3 w-3" />
-  if (trend === "decreasing") return <ArrowDownLeft className="h-3 w-3" />
-  return null // stable -> no icon
+  switch (trend) {
+    case "increasing":
+      return <ArrowUpRight className="h-4 w-4 text-red-400" />
+    case "decreasing":
+      return <ArrowDownLeft className="h-4 w-4 text-green-400" />
+    default:
+      return <ChevronDown className="h-4 w-4 text-gray-400" />
+  }
 }
 
 const getVolatilityColor = (score: number) => {
@@ -36,29 +37,49 @@ const getVolatilityColor = (score: number) => {
 }
 
 export function VolatilityCard({ volatility, getVolatilityLevel, getDripMultiplier }: VolatilityProps) {
-  const multiplier = getDripMultiplier()
   // Grab live drip amounts from central faucet hook (same source as TokenCard)
   const { faucet } = useFaucet()
   const monCurrent = faucet.mon.currentDripAmount
   const linkCurrent = faucet.link.currentDripAmount
 
+  // Get actual threshold values from the Zustand store (calculated as dripRate * thresholdFactor)
+  const monTokenState = useTokenState('mon')
+  const linkTokenState = useTokenState('link')
+
   const liveRows = [
-    { token: "mon" as const, symbol: "MON", current: monCurrent },
-    { token: "link" as const, symbol: "LINK", current: linkCurrent },
+    { 
+      token: "mon" as const, 
+      symbol: "MON", 
+      current: monCurrent,
+      baseDrip: monTokenState.baseDripAmount,  // Always from contract now
+      threshold: monTokenState.lowTankThreshold,
+    },
+    { 
+      token: "link" as const, 
+      symbol: "LINK", 
+      current: linkCurrent,
+      baseDrip: linkTokenState.baseDripAmount, // Always from contract now
+      threshold: linkTokenState.lowTankThreshold,
+    },
   ]
+
+  // Calculate multiplier from actual contract data
+  const calculateMultiplier = (row: typeof liveRows[0]) => {
+    if (row.baseDrip > 0 && row.current > 0) {
+      return row.current / row.baseDrip
+    }
+    return 1
+  }
+
+  const actualMultiplier = calculateMultiplier(liveRows[0])
 
   // Track previous multiplier for delta display
   const prevMultiplierRef = useRef<number | null>(null)
-  const delta = prevMultiplierRef.current !== null ? multiplier - prevMultiplierRef.current : 0
+  const delta = prevMultiplierRef.current !== null ? actualMultiplier - prevMultiplierRef.current : 0
 
   useEffect(() => {
-    prevMultiplierRef.current = multiplier
-  }, [multiplier])
-
-  const rows: { token: "mon" | "link"; symbol: string }[] = [
-    { token: "mon", symbol: "MON" },
-    { token: "link", symbol: "LINK" },
-  ]
+    prevMultiplierRef.current = actualMultiplier
+  }, [actualMultiplier])
 
   return (
     <TooltipProvider>
@@ -83,8 +104,8 @@ export function VolatilityCard({ volatility, getVolatilityLevel, getDripMultipli
             </div>
             {liveRows.map((row, idx) => {
               const current = row.current || 0
-              const mult = multiplier
-              const base = mult !== 0 ? current / mult : 0
+              const base = row.baseDrip  // Use actual base drip from store/fallback
+              const mult = actualMultiplier  // ✅ Use calculated multiplier from real data
               const up = mult > 1
               const multDisplay = isFinite(mult) && mult !== 0 ? mult.toFixed(2) : "-"
               return (
@@ -121,8 +142,8 @@ export function VolatilityCard({ volatility, getVolatilityLevel, getDripMultipli
               <ChevronDown className="h-3 w-3 text-white/50 transition-transform group-open:rotate-180" />
             </summary>
             <div className="mt-2 space-y-1 text-xs font-body text-white/80">
-              <p>MON low-tank threshold: 150.00 MON</p>
-              <p>LINK low-tank threshold: 2 000.00 LINK</p>
+              <p>MON low-tank threshold: {formatBalance(monTokenState.lowTankThreshold)} MON</p>
+              <p>LINK low-tank threshold: {formatBalance(linkTokenState.lowTankThreshold)} LINK</p>
               <p>Re-evaluated each time a Refuel transaction completes.</p>
             </div>
           </details>

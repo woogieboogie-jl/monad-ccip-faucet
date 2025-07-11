@@ -359,13 +359,13 @@ export const TokenCard = memo(({
               <img 
                 src={config.iconUrl} 
                 alt={config.name} 
-                className="h-5 w-5"
+                className="h-5 w-5 rounded-full border border-white/40"
                 onError={(e) => {
                   // Fallback to text if image fails to load
                   const target = e.target as HTMLImageElement;
                   target.style.display = 'none';
                   const fallback = document.createElement('span');
-                  fallback.className = 'text-white text-xs font-bold flex items-center justify-center h-5 w-5';
+                  fallback.className = 'text-white text-xs font-bold flex items-center justify-center h-5 w-5 rounded-full border border-white/40';
                   fallback.textContent = config.symbol.charAt(0);
                   target.parentNode?.appendChild(fallback);
                 }}

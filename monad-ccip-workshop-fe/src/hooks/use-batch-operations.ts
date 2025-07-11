@@ -5,6 +5,7 @@ import { FAUCET_ADDRESS, LINK_TOKEN_ADDRESS } from '@/lib/addresses'
 import { faucetAbi } from '@/lib/faucetAbi'
 import { publicClient } from '@/lib/viem'
 import { cachedContractRead } from '@/lib/request-cache'
+import { getFaucetSnapshot } from '@/lib/faucetClient'
 
 interface BatchCall {
   target: `0x${string}`
@@ -21,7 +22,7 @@ interface BatchResult {
 export function useBatchOperations() {
   const publicClient = usePublicClient()
   const { data: walletClient } = useWalletClient()
-  const { batchUpdateTokens, updateVaultBalance } = useFaucetStore()
+  const { updateTokenState, updateVaultBalance, batchUpdateTokens } = useFaucetStore()
 
   /**
    * Batch multiple contract reads into a single multicall
@@ -60,123 +61,48 @@ export function useBatchOperations() {
   }
 
   /**
-   * Batch multiple state reads for faucet data
-   * NOW WITH CACHING: Prevents duplicate calls within configured time windows
+   * UPDATED: Use centralized getFaucetSnapshot for consistency
+   * This ensures we get base drip rates from contract and avoid duplicate RPC calls
    */
   const fetchAllFaucetData = async () => {
     if (!publicClient) return
 
     try {
-      console.log('🔄 Fetching faucet data using cached individual calls...')
+      console.log('🔄 Starting centralized faucet data fetch...')
       
-      // Use cached contract reads with optimized TTL values
-      const [reservoirResult, treasuryResult, linkBalanceResult] = await Promise.all([
-        // Tank data changes frequently - shorter cache (30s)
-        cachedContractRead(
-          'getReservoirStatus',
-          () => publicClient.readContract({
-            address: FAUCET_ADDRESS as `0x${string}`,
-            abi: faucetAbi,
-            functionName: 'getReservoirStatus',
-          }),
-          [],
-          30 * 1000 // 30 seconds
-        ),
-        
-        // Treasury data changes less frequently - longer cache (60s)
-        cachedContractRead(
-          'getTreasuryStatus',
-          () => publicClient.readContract({
-            address: FAUCET_ADDRESS as `0x${string}`,
-            abi: faucetAbi,
-            functionName: 'getTreasuryStatus',
-          }),
-          [],
-          60 * 1000 // 60 seconds
-        ),
-        
-        // LINK balance changes moderately - medium cache (45s)
-        cachedContractRead(
-          'linkBalance',
-          () => publicClient.readContract({
-            address: LINK_TOKEN_ADDRESS as `0x${string}`,
-            abi: parseAbi(['function balanceOf(address) view returns (uint256)']),
-            functionName: 'balanceOf',
-            args: [FAUCET_ADDRESS as `0x${string}`],
-          }),
-          [FAUCET_ADDRESS],
-          45 * 1000 // 45 seconds
-        ),
-      ])
+      // Use the centralized snapshot function which includes base drip rates
+      const snap = await getFaucetSnapshot()
+      
+      console.log('📊 Faucet snapshot received:', {
+        monPool: formatEther(snap.mon.pool),
+        monDrip: formatEther(snap.mon.drip),
+        monBaseDrip: formatEther(snap.mon.baseDrip),
+        linkPool: formatEther(snap.link.pool),
+        linkDrip: formatEther(snap.link.drip),
+        linkBaseDrip: formatEther(snap.link.baseDrip),
+      })
 
-      // Process reservoir status
-      if (reservoirResult) {
-        const [monPool, monDripRate, linkPool, linkDripRate] = reservoirResult as [bigint, bigint, bigint, bigint]
+      // Batch update token states with contract-based base drip rates
+      batchUpdateTokens({
+        mon: {
+          tankBalance: Number(formatEther(snap.mon.pool)),
+          currentDripAmount: Number(formatEther(snap.mon.drip)),
+          baseDripAmount: Number(formatEther(snap.mon.baseDrip)),  // ✅ From contract
+        },
+        link: {
+          tankBalance: Number(formatEther(snap.link.pool)),
+          currentDripAmount: Number(formatEther(snap.link.drip)),
+          baseDripAmount: Number(formatEther(snap.link.baseDrip)), // ✅ From contract
+        },
+      })
 
-        console.log('🏊 Reservoir Status:', {
-          monPool: formatEther(monPool),
-          monDripRate: formatEther(monDripRate),
-          linkPool: formatEther(linkPool),
-          linkDripRate: formatEther(linkDripRate),
-        })
+      // Update vault balances from treasury data
+      updateVaultBalance('mon', Number(formatEther(snap.treasury.mon)))
+      updateVaultBalance('link', Number(formatEther(snap.treasury.link)))
 
-        // Batch update token states
-        batchUpdateTokens({
-          mon: {
-            tankBalance: Number(formatEther(monPool)),
-            currentDripAmount: Number(formatEther(monDripRate)),
-            baseDripAmount: Number(formatEther(monDripRate)),
-          },
-          link: {
-            tankBalance: Number(formatEther(linkPool)),
-            currentDripAmount: Number(formatEther(linkDripRate)),
-            baseDripAmount: Number(formatEther(linkDripRate)),
-          },
-        })
-      }
-
-      // Process treasury status
-      if (treasuryResult) {
-        const [monTreasury, monReservoir, linkTreasury, linkReservoir, monCapacity, linkCapacity] = treasuryResult as [bigint, bigint, bigint, bigint, bigint, bigint]
-        
-        console.log('📊 Treasury Status (Raw BigInt):', {
-          monTreasury: monTreasury.toString(),
-          monReservoir: monReservoir.toString(), 
-          linkTreasury: linkTreasury.toString(),
-          linkReservoir: linkReservoir.toString(),
-          monCapacity: monCapacity.toString(),
-          linkCapacity: linkCapacity.toString(),
-        })
-        
-        console.log('📊 Treasury Status (Formatted):', {
-          monTreasury: formatEther(monTreasury),
-          monReservoir: formatEther(monReservoir), 
-          linkTreasury: formatEther(linkTreasury),
-          linkReservoir: formatEther(linkReservoir),
-          monCapacity: formatEther(monCapacity),
-          linkCapacity: formatEther(linkCapacity),
-        })
-        
-        // FIXED: Use treasury values for vault balances (deep reserves), not reservoir values (tank balances)
-        const monVaultBalance = Number(formatEther(monTreasury))
-        const linkVaultBalance = Number(formatEther(linkTreasury))
-        
-        console.log('💰 Calculated vault balances:', {
-          monVault: monVaultBalance,
-          linkVault: linkVaultBalance,
-        })
-        
-        updateVaultBalance('mon', monVaultBalance)
-        updateVaultBalance('link', linkVaultBalance)
-        
-        console.log('💰 Updated vault balances in store')
-      } else {
-        console.warn('⚠️ No treasury result received from contract call')
-      }
-
-      console.log('✅ Batch fetch completed successfully')
+      console.log('✅ Centralized faucet data fetch completed successfully')
     } catch (error) {
-      console.error('❌ Batch fetch failed:', error)
+      console.error('❌ Centralized faucet data fetch failed:', error)
     }
   }
 

@@ -241,13 +241,13 @@ export function Header({
                     <img 
                       src="/tokens/mon.png" 
                       alt="MON Token" 
-                      className="w-4 h-4 rounded-full shadow-sm border-white/20"
+                      className="w-4 h-4 rounded-full shadow-sm border border-white/40"
                       onError={(e) => {
                         // Fallback to styled div if image fails to load
                         const target = e.target as HTMLImageElement;
                         target.style.display = 'none';
                         const fallback = document.createElement('div');
-                        fallback.className = 'flex items-center justify-center w-4 h-4 bg-gradient-to-br from-purple-400 to-blue-500 rounded-full shadow-sm';
+                        fallback.className = 'flex items-center justify-center w-4 h-4 bg-gradient-to-br from-purple-400 to-blue-500 rounded-full shadow-sm border border-white/40';
                         const text = document.createElement('span');
                         text.className = 'text-white text-[10px] font-bold';
                         text.textContent = 'M';
@@ -266,13 +266,13 @@ export function Header({
                     <img 
                       src="/tokens/link.png" 
                       alt="LINK Token" 
-                      className="w-4 h-4 rounded-full shadow-sm"
+                      className="w-4 h-4 rounded-full shadow-sm border border-white/40"
                       onError={(e) => {
                         // Fallback to styled div if image fails to load
                         const target = e.target as HTMLImageElement;
                         target.style.display = 'none';
                         const fallback = document.createElement('div');
-                        fallback.className = 'flex items-center justify-center w-4 h-4 bg-gradient-to-br from-blue-400 to-cyan-500 rounded-full shadow-sm';
+                        fallback.className = 'flex items-center justify-center w-4 h-4 bg-gradient-to-br from-blue-400 to-cyan-500 rounded-full shadow-sm border border-white/40';
                         const icon = document.createElement('div');
                         icon.innerHTML = '<svg class="h-2.5 w-2.5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
                         fallback.appendChild(icon);

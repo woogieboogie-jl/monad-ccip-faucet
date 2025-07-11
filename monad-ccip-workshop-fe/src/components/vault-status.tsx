@@ -135,29 +135,6 @@ function VaultStatusComponent({ isOwner }: VaultStatusProps) {
               <p>Refresh vault balances from blockchain</p>
             </TooltipContent>
           </Tooltip>
-          
-
-          {/* DEBUG: Manual cache clear button */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                onClick={async () => {
-                  console.log('🧹 Clearing cache manually...')
-                  const { requestCache } = await import('@/lib/request-cache')
-                  requestCache.clear()
-                  await handleRefreshBalances()
-                }}
-                size="sm"
-                variant="ghost"
-                className="text-white/70 hover:text-white hover:bg-white/10 p-2"
-              >
-                <AlertTriangle className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Clear cache & refresh (debug)</p>
-            </TooltipContent>
-          </Tooltip>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:gap-6">
