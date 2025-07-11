@@ -1,0 +1,21 @@
+{
+  "name": "monad-ccip-faucet",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Monad cross-chain faucet – contracts + AA frontend in a pnpm monorepo",
+  "license": "MIT",
+  "workspaces": [
+    "monad-ccip-workshop",
+    "monad-ccip-workshop-fe"
+  ],
+  "scripts": {
+    "dev:contracts": "cd monad-ccip-workshop && forge test -vv",
+    "dev:frontend": "cd monad-ccip-workshop-fe && pnpm dev",
+    "deploy": "cd monad-ccip-workshop && forge script script/DeployFaucet.s.sol --broadcast",
+    "lint": "pnpm -r lint || true",
+    "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "turbo": "^1.12.2"
+  }
+} 
