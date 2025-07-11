@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "monad-ccip-faucet",
-  "buildCommand": "pnpm install && cd monad-ccip-workshop-fe && pnpm build",
+  "buildCommand": "pnpm --filter ./monad-ccip-workshop-fe build",
   "outputDirectory": "monad-ccip-workshop-fe/dist",
   "installCommand": "pnpm install",
   "headers": [
