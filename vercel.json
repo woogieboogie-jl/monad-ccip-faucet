@@ -1,9 +1,9 @@
 {
   "version": 2,
   "name": "monad-ccip-faucet",
-  "buildCommand": "cd monad-ccip-workshop-fe && npm install && npm run build",
+  "buildCommand": "pnpm install && cd monad-ccip-workshop-fe && pnpm build",
   "outputDirectory": "monad-ccip-workshop-fe/dist",
-  "installCommand": "npm install",
+  "installCommand": "pnpm install",
   "headers": [
     {
       "source": "/(.*)",
