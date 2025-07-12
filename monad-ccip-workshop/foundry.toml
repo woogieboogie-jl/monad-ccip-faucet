@@ -13,8 +13,3 @@ remappings = [
 ]
 
 
-[rpc_endpoints]
-avalanche_fuji = "https://avax-fuji.g.alchemy.com/v2/bYIbSPa2_ReoZHLM4-5LHaJ_HcFJsXbL"
-ethereum_sepolia = "https://ethereum-sepolia-rpc.publicnode.com"
-sonic_blaze = "https://sonic-blaze-rpc.publicnode.com"
-monad_testnet = "https://testnet-rpc.monad.xyz"

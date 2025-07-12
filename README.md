@@ -67,65 +67,98 @@ pnpm install
 
 This will install dependencies for both the contracts and frontend workspaces.
 
-### Step 3: Deploy Smart Contracts
+### Step 3: Environment Configuration
 
-Navigate to the contracts directory and follow the comprehensive deployment guide:
+**Important**: This project uses a single consolidated `.env` file at the project root for both contracts and frontend.
+
+Create the `.env` file at the project root:
 
 ```bash
-cd monad-ccip-workshop
+touch .env
 ```
 
-**Important**: Follow the step-by-step deployment instructions in `monad-ccip-workshop/README.md`. This includes:
-
-1. Setting up your `.env` file with RPC URLs and private keys
-2. Deploying `Faucet.sol` to Monad testnet
-3. Deploying `VolatilityHelper.sol` to Avalanche Fuji
-4. Configuring cross-chain communication
-5. Funding contracts with LINK tokens
-6. Verifying contracts on block explorers
-
-### Step 4: Configure Frontend Environment
-
-Navigate to the frontend directory and create your environment configuration:
+Add the following configuration to your `.env` file:
 
 ```bash
-cd ../monad-ccip-workshop-fe
-cp .env.example .env.local
-```
+# ═══════════════════════════════════════════════════════════════════════════════
+# MONAD CCIP FAUCET - CONSOLIDATED ENVIRONMENT CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
 
-Fill in your `.env.local` file with:
+# ── DEPLOYMENT SECRETS ──────────────────────────────────────────────────────
+FAUCET_PRIVATE_KEY=your_private_key_here
 
-```bash
+# ── RPC ENDPOINTS ────────────────────────────────────────────────────────────
+MONAD_TESTNET_RPC_URL=https://monad-testnet.g.alchemy.com/v2/your_key
+AVALANCHE_FUJI_RPC_URL=https://avax-fuji.g.alchemy.com/v2/your_key
 
-# ── secrets / scripts ───────────────────────────────
-FAUCET_PRIVATE_KEY=
-PIMLICO_API_KEY=
-MONAD_TESTNET_RPC_URL=
-AVALANCHE_FUJI_RPC_URL=
+# ── EXTERNAL SERVICES ───────────────────────────────────────────────────────
+PIMLICO_API_KEY=your_pimlico_key
+WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id
+
+# ── NETWORK CONFIGURATION ───────────────────────────────────────────────────
+CHAIN_ID=10143
+POLICY_ID=your_policy_id
+
+# ── TOKEN ADDRESSES ─────────────────────────────────────────────────────────
 LINK_TOKEN_ADDRESS=0x6fE981Dbd557f81ff66836af0932cba535Cbc343
 MONAD_TESTNET_ROUTER_ADDRESS=0x5f16e51e3Dcb255480F090157DD01bA962a53E54
 
-# ── browser-exposed vars ────────────────────────────
-POLICY_ID=
-CHAIN_ID=10143
-WALLETCONNECT_PROJECT_ID=
-
-# Contract Addresses (from your deployment)
-# will be overwritten by deploy script
+# ── DEPLOYED CONTRACT ADDRESSES ─────────────────────────────────────────────
+# These will be updated after deployment
 FAUCET_ADDRESS=
 HELPER_ADDRESS=
-
 ```
 
-### Step 5: Run the Frontend
+**How the Environment Router Works:**
+- The frontend uses a sophisticated Vite configuration that automatically maps base variables to `VITE_` prefixed versions
+- `FAUCET_ADDRESS` becomes `VITE_FAUCET_ADDRESS` for frontend use
+- `HELPER_ADDRESS` becomes `VITE_HELPER_ADDRESS` for frontend use
+- No manual duplication needed - single source of truth
 
-From the root directory, start the development server:
+### Step 4: Deploy Smart Contracts
+
+Navigate to the contracts directory and deploy:
 
 ```bash
+cd monad-ccip-workshop
+
+# Create symbolic link to root .env file
+ln -sf ../.env .env
+
+# Deploy Faucet contract to Monad testnet
+source .env && forge script script/DeployFaucet.s.sol:DeployFaucet --rpc-url $MONAD_TESTNET_RPC_URL --broadcast -vvvv
+
+# Update root .env with deployed Faucet address
+# Edit ../.env and add: FAUCET_ADDRESS=0x...
+
+# Deploy VolatilityHelper to Avalanche Fuji
+source .env && forge script script/DeployVolatilityHelper.s.sol:DeployVolatilityHelper --rpc-url $AVALANCHE_FUJI_RPC_URL --broadcast -vvvv
+
+# Update root .env with deployed Helper address
+# Edit ../.env and add: HELPER_ADDRESS=0x...
+
+# Configure cross-chain communication
+source .env && forge script script/ConfigureFaucet.s.sol:ConfigureFaucet --rpc-url $MONAD_TESTNET_RPC_URL --broadcast -vvvv
+```
+
+**Important**: Follow the comprehensive deployment guide in `monad-ccip-workshop/README.md` for detailed instructions, including contract verification and funding.
+
+### Step 5: Start Frontend Development
+
+```bash
+# Return to project root
+cd ..
+
+# Start the frontend development server
 pnpm run dev:frontend
 ```
 
 The application will be available at `http://localhost:3000`
+
+**Frontend Environment Handling:**
+- The Vite configuration automatically loads the root `.env` file
+- Base variables are automatically mapped to `VITE_` versions for frontend use
+- No separate frontend environment setup required
 
 ## 🛠️ Available Scripts
 
@@ -144,11 +177,26 @@ pnpm run deploy:frontend  # Deploy frontend to Vercel
 
 ### Frontend Deployment (Vercel)
 
-The frontend is configured for automatic deployment to Vercel:
+The frontend is configured for automatic deployment to Vercel with the consolidated environment setup:
 
 1. **Connect your repository** to Vercel
-2. **Set environment variables** in Vercel dashboard matching your `.env.local`
+2. **Set environment variables** in Vercel dashboard:
+   ```bash
+   # Copy these from your root .env file
+   VITE_FAUCET_ADDRESS=your_deployed_faucet_address
+   VITE_HELPER_ADDRESS=your_deployed_helper_address
+   VITE_PIMLICO_API_KEY=your_pimlico_key
+   VITE_WALLETCONNECT_PROJECT_ID=your_walletconnect_id
+   VITE_MONAD_TESTNET_RPC_URL=your_monad_rpc_url
+   VITE_AVALANCHE_FUJI_RPC_URL=your_avalanche_rpc_url
+   VITE_CHAIN_ID=10143
+   VITE_POLICY_ID=your_policy_id
+   VITE_LINK_TOKEN_ADDRESS=0x6fE981Dbd557f81ff66836af0932cba535Cbc343
+   VITE_MONAD_TESTNET_ROUTER_ADDRESS=0x5f16e51e3Dcb255480F090157DD01bA962a53E54
+   ```
 3. **Deploy** - Vercel will automatically detect the Next.js app and deploy
+
+**Note**: The Vite environment router automatically creates these `VITE_` variables during local development, but for production deployment, you need to set them manually in Vercel.
 
 The `vercel.json` configuration handles:
 - Build command optimization
@@ -178,6 +226,12 @@ See `monad-ccip-workshop/README.md` for detailed deployment instructions.
 - **Responsive design** with modern UI components
 - **Performance optimized** with 85% RPC call reduction
 
+### Environment Router
+- **Consolidated Configuration**: Single `.env` file for both contracts and frontend
+- **Automatic Variable Mapping**: Base variables automatically become `VITE_` prefixed for frontend use
+- **No Duplication**: DRY principle maintained across the entire stack
+- **Developer Friendly**: Simple setup with intelligent defaults
+
 ### Architecture Benefits
 - **Decentralized**: No single point of failure
 - **Scalable**: Modular design supports easy expansion
@@ -203,10 +257,69 @@ pnpm run test
 pnpm run test:integration
 ```
 
+## 🔧 Troubleshooting
+
+### Environment Variable Issues
+
+**Problem**: `vm.envUint: environment variable "FAUCET_PRIVATE_KEY" not found`
+**Solution**: 
+```bash
+cd monad-ccip-workshop
+# Recreate the symlink
+ln -sf ../.env .env
+# Always source the environment before running forge commands
+source .env && forge script ...
+```
+
+**Problem**: Frontend can't find contract addresses
+**Solution**: 
+- Ensure your root `.env` file has `FAUCET_ADDRESS` and `HELPER_ADDRESS` set
+- The Vite environment router automatically creates `VITE_FAUCET_ADDRESS` and `VITE_HELPER_ADDRESS`
+- Restart the frontend dev server after updating contract addresses
+
+**Problem**: RPC URL not found during deployment
+**Solution**:
+```bash
+# Check if environment variables are loaded
+cd monad-ccip-workshop
+source .env
+echo $MONAD_TESTNET_RPC_URL
+# Should output your RPC URL
+```
+
+### Deployment Issues
+
+**Problem**: Contract deployment fails with gas estimation errors
+**Solution**:
+- Ensure your wallet has sufficient testnet funds
+- Try adding `--legacy` flag for legacy transaction format
+- Increase gas limit with `--gas-limit 6000000`
+
+**Problem**: CCIP messages not being delivered
+**Solution**:
+- Verify both contracts are funded with LINK tokens
+- Check that `ConfigureFaucet.s.sol` was run successfully
+- Monitor CCIP explorer for message status
+
+### Development Workflow
+
+**After cloning the repository:**
+1. `pnpm install` - Install all dependencies
+2. Create root `.env` file with your configuration
+3. `cd monad-ccip-workshop && ln -sf ../.env .env` - Create symlink
+4. Deploy contracts following the deployment guide
+5. `cd .. && pnpm run dev:frontend` - Start frontend
+
+**When updating contract addresses:**
+1. Update root `.env` file only
+2. Frontend automatically picks up changes via environment router
+3. No need to restart dev server (hot reload works)
+
 ## 📚 Documentation
 
 - **Contract Documentation**: `monad-ccip-workshop/README.md`
 - **Frontend Documentation**: `monad-ccip-workshop-fe/README.md`
+- **Environment Setup**: Consolidated `.env` configuration with automatic variable mapping
 
 ## 📄 License
 
@@ -226,4 +339,4 @@ This is a testnet application. Do not use with mainnet funds. Always verify cont
 
 **Happy Hacking!** 🚀
 
-For detailed deployment instructions, see the README files in each workspace directory. 
+For detailed deployment instructions, see the README files in each workspace directory.

@@ -21,45 +21,74 @@ We're going to deploy using foundry scripts:
 ## Step-by-Step Deployment
 
 ### [.env Setup]
-Fill your .env file with RPC URLs & deployer private key:
+**Important**: This project uses a consolidated `.env` file located at the project root (`../`). 
+
+**Setup Steps:**
+1. Ensure the root `.env` file exists with your deployer private key 
 ```bash
-MONAD_TESTNET_RPC_URL=https://testnet-rpc.monad.xyz
-AVALANCHE_FUJI_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc
-PRIVATE_KEY=your_private_key_here
+cp .env.example .env
 ```
+
+2. Create a symbolic link to make it accessible to foundry scripts:
+```bash
+ln -sf ../.env .env
+```
+
+**Required Environment Variables:**
+```bash
+# Deployment key
+FAUCET_PRIVATE_KEY=your_private_key_here
+
+# RPC endpoints (already configured)
+MONAD_TESTNET_RPC_URL=https://monad-testnet.g.alchemy.com/v2/...
+AVALANCHE_FUJI_RPC_URL=https://avax-fuji.g.alchemy.com/v2/...
+
+# Contract addresses (updated after deployment)
+FAUCET_ADDRESS=
+HELPER_ADDRESS=
+```
+
+**Why This Works:**
+- Single source of truth for all environment variables
+- Frontend automatically picks up changes via Vite environment router
+- No duplication between contracts and frontend configuration
 
 ### [Deploy Faucet.sol]
 ```bash
-forge script script/DeployFaucet.s.sol:DeployFaucet --rpc-url $MONAD_TESTNET_RPC_URL --broadcast -vvvv
+source .env && forge script script/DeployFaucet.s.sol:DeployFaucet --rpc-url $MONAD_TESTNET_RPC_URL --broadcast -vvvv
 ```
 
 ### [Update .env]
-Add the deployed Faucet address to your .env file:
+Add the deployed Faucet address to your root `.env` file:
 ```bash
 FAUCET_ADDRESS=0x...
 ```
 
+**Note**: The frontend will automatically pick up this address via the Vite environment router.
+
 ### [Deploy VolatilityHelper.sol]
 ```bash
-forge script script/DeployVolatilityHelper.s.sol:DeployVolatilityHelper --rpc-url $AVALANCHE_FUJI_RPC_URL --broadcast -vvvv
+source .env && forge script script/DeployVolatilityHelper.s.sol:DeployVolatilityHelper --rpc-url $AVALANCHE_FUJI_RPC_URL --broadcast -vvvv
 ```
 
 ### [Update .env]
-Add the deployed VolatilityHelper address to your .env file:
+Add the deployed VolatilityHelper address to your root `.env` file:
 ```bash
 HELPER_ADDRESS=0x...
 ```
 
+**Note**: The frontend will automatically pick up this address via the Vite environment router.
+
 ### [Configure Faucet.sol] 
 Whitelist the deployed VolatilityHelper.sol on Fuji:
 ```bash
-forge script script/ConfigureFaucet.s.sol:ConfigureFaucet --rpc-url $MONAD_TESTNET_RPC_URL --broadcast -vvvv
+source .env && forge script script/ConfigureFaucet.s.sol:ConfigureFaucet --rpc-url $MONAD_TESTNET_RPC_URL --broadcast -vvvv
 ```
 
 ## Example Deployed Addresses
 ```bash
-FAUCET_ADDRESS=0x93EB461cF90bF505Adc00E295FD91A6063e46eDa
-HELPER_ADDRESS=0x3feeacec974ca351cc563bE8542e690c29C0a64e
+FAUCET_ADDRESS=0x0638dED53d44c38fed362F987feacAf067357509
+HELPER_ADDRESS=0xb8985AC25eE965e8812E33bc618a3a62e69e648B
 ```
 
 ## Fund Contracts
@@ -67,13 +96,21 @@ Send LINK to both Faucet (Monad) and Helper (Avalanche) contracts - around 10-20
 
 ## Trigger Refill Requests
 ```bash
-cast send --rpc-url $MONAD_RPC_URL --private-key $FAUCET_PRIVATE_KEY --legacy --gas-limit 6000000 $FAUCET_ADDRESS "triggerRefillCheck()"
+source .env && cast send --rpc-url $MONAD_TESTNET_RPC_URL --private-key $FAUCET_PRIVATE_KEY --legacy --gas-limit 6000000 $FAUCET_ADDRESS "triggerRefillCheck()"
 ```
 
 ## Link Frontend
-Update addresses in the .env file in the project root directory:
+Contract addresses are automatically available to the frontend via the consolidated `.env` file at the project root. 
+
+**How It Works:**
+- The Vite configuration automatically maps base variables to VITE_ versions
+- `FAUCET_ADDRESS` becomes `VITE_FAUCET_ADDRESS` for frontend use
+- `HELPER_ADDRESS` becomes `VITE_HELPER_ADDRESS` for frontend use
+- No manual duplication needed - single source of truth
+
+**Start Frontend:**
 ```bash
-cd ..
+cd .. && pnpm run dev:frontend
 ```
 
 Happy Hacking! 🚀

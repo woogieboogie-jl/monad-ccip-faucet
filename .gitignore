@@ -100,10 +100,10 @@ temp/
 next-env.d.ts
 
 # Foundry/Forge (for smart contracts)
-cache/
-broadcast/
-artifacts/
-typechain-types/
+monad-ccip-workshop/cache/**
+monad-ccip-workshop/broadcast/**
+monad-ccip-workshop/artifacts/**
+monad-ccip-workshop/typechain-types/**
 
 # IDE
 .vscode/
