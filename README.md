@@ -96,7 +96,6 @@ cp .env.example .env.local
 Fill in your `.env.local` file with:
 
 ```bash
-# Contract Addresses (from your deployment)
 
 # ── secrets / scripts ───────────────────────────────
 FAUCET_PRIVATE_KEY=
@@ -111,6 +110,7 @@ POLICY_ID=
 CHAIN_ID=10143
 WALLETCONNECT_PROJECT_ID=
 
+# Contract Addresses (from your deployment)
 # will be overwritten by deploy script
 FAUCET_ADDRESS=
 HELPER_ADDRESS=
