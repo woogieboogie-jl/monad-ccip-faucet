@@ -13,7 +13,7 @@ import { parseAbi, encodeFunctionData, parseEther } from 'viem'
 import { publicClient } from '@/lib/viem'
 import { useFaucet } from "@/hooks/use-faucet"
 import { useStatus } from "@/hooks/use-status"
-import { VAULT_THRESHOLDS } from "@/lib/constants"
+// Dynamic vault thresholds: critical = next refill amount, warning = 10× refill amount
 import { FAUCET_ADDRESS } from "@/lib/addresses"
 
 // Optional helper address from env
@@ -40,9 +40,13 @@ function VaultStatusComponent({ isOwner }: VaultStatusProps) {
     })
   }, [faucet.vaultMon, faucet.vaultLink])
 
-  // Use the status hook for both vaults
-  const monStatus = useStatus(faucet.vaultMon, 100000, VAULT_THRESHOLDS.mon)
-  const linkStatus = useStatus(faucet.vaultLink, 100000, VAULT_THRESHOLDS.link)
+  // Determine dynamic thresholds based on on-chain lowTankThreshold (== refill amount)
+  const monCritical = faucet.mon.lowTankThreshold // amount needed for next refill
+  const linkCritical = faucet.link.lowTankThreshold
+
+  const monStatus = useStatus(faucet.vaultMon, monCritical)
+
+  const linkStatus = useStatus(faucet.vaultLink, linkCritical)
 
   // Stabilize the animated state to prevent flickering
   const isWithdrawValid = useMemo(() => {

@@ -6,43 +6,48 @@ interface StatusConfig {
   level: StatusLevel
   text: string
   color: string
-  progress?: number
+  progress?: number // 0-100 for UI bars
 }
 
-interface StatusThresholds {
-  critical: number
-  warning: number
-}
-
-export function useStatus(value: number, max: number, thresholds: StatusThresholds): StatusConfig {
+/**
+ * Decide vault/tank status based on dynamic thresholds derived from contract data.
+ * @param value             Current balance
+ * @param criticalThreshold Amount required for the next refill. `warning` is 10× this value.
+ */
+export function useStatus(value: number, criticalThreshold: number): StatusConfig {
   return useMemo(() => {
-    const percentage = (value / max) * 100
-    
-    if (value < thresholds.critical) {
+    // Safeguard against div-by-zero
+    const crit = criticalThreshold === 0 ? 1 : criticalThreshold
+    const warn = crit * 10
+
+    // Helper to clamp progress to 0-100
+    const pct = (num: number, denom: number) => Math.min(100, (num / denom) * 100)
+
+    if (value < crit) {
       return {
         level: "critical",
         text: "Critical",
         color: "text-red-400",
-        progress: percentage
+        progress: pct(value, crit),
       }
     }
-    
-    if (value < thresholds.warning) {
+
+    if (value < warn) {
       return {
-        level: "warning", 
+        level: "warning",
         text: "Low",
         color: "text-yellow-400",
-        progress: percentage
+        progress: pct(value, warn),
       }
     }
-    
+
     return {
       level: "good",
-      text: "Good", 
+      text: "Good",
       color: "text-green-400",
-      progress: percentage
+      progress: 100,
     }
-  }, [value, max, thresholds.critical, thresholds.warning])
+  }, [value, criticalThreshold])
 }
 
 // Re-export utilities from lib/utils for convenience
