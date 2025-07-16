@@ -355,7 +355,7 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
     }
 
     function _mapVolToDrip(uint256 vol, uint256 maxDrip, uint256 minDrip) internal pure returns (uint256) {
-        // vol assumed 0-1000; higher vol => lower drip
+        // vol assumed 0-1000; higher vol => higher drip (linear mapping)
         if (vol > 1000) vol = 1000;
         uint256 range = maxDrip - minDrip;
         uint256 drip = minDrip + (range * vol / 1000);

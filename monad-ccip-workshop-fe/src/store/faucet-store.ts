@@ -233,11 +233,11 @@ export const useFaucetStore = create<FaucetStoreState & FaucetActions>()(
           getDripReasoning: () => {
             const state = get()
             const score = state.volatility.score
-            if (score <= 20) return "Market is stable - standard drip rates"
-            if (score <= 40) return "Low volatility - slightly reduced drip rates"
-            if (score <= 60) return "Medium volatility - moderate drip adjustments"
-            if (score <= 80) return "High volatility - increased drip rates"
-            return "Very high volatility - maximum drip rates"
+            if (score <= 20) return "Very low volatility - reduced drip rates to preserve reserves"
+            if (score <= 40) return "Low volatility - slightly reduced drip rates for conservative distribution"
+            if (score <= 60) return "Medium volatility - standard drip rates maintained"
+            if (score <= 80) return "High volatility - increased drip rates due to market uncertainty"
+            return "Very high volatility - maximum drip rates to support users during volatile periods"
           },
           
           updateVolatilityScore: (newScore) =>
@@ -249,7 +249,8 @@ export const useFaucetStore = create<FaucetStoreState & FaucetActions>()(
               
               state.volatility.score = Math.max(1, Math.min(100, newScore))
               state.volatility.trend = trend
-              state.volatility.multiplier = 1.0 + (newScore - 50) / 100
+              // REMOVED: Incorrect multiplier calculation - multiplier should be calculated from actual drip rates
+              // state.volatility.multiplier = 1.0 + (newScore - 50) / 100
               state.volatility.lastUpdated = new Date()
             }),
           

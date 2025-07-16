@@ -71,15 +71,17 @@ export function VolatilityCard({ volatility, getVolatilityLevel, getDripMultipli
     return 1
   }
 
-  const actualMultiplier = calculateMultiplier(liveRows[0])
+  // FIXED: Calculate individual multipliers for MON and LINK instead of using just MON's multiplier
+  const monMultiplier = calculateMultiplier(liveRows[0])
+  const linkMultiplier = calculateMultiplier(liveRows[1])
 
-  // Track previous multiplier for delta display
+  // Track previous multiplier for delta display (use MON as reference)
   const prevMultiplierRef = useRef<number | null>(null)
-  const delta = prevMultiplierRef.current !== null ? actualMultiplier - prevMultiplierRef.current : 0
+  const delta = prevMultiplierRef.current !== null ? monMultiplier - prevMultiplierRef.current : 0
 
   useEffect(() => {
-    prevMultiplierRef.current = actualMultiplier
-  }, [actualMultiplier])
+    prevMultiplierRef.current = monMultiplier
+  }, [monMultiplier])
 
   return (
     <TooltipProvider>
@@ -105,7 +107,7 @@ export function VolatilityCard({ volatility, getVolatilityLevel, getDripMultipli
             {liveRows.map((row, idx) => {
               const current = row.current || 0
               const base = row.baseDrip  // Use actual base drip from store/fallback
-              const mult = actualMultiplier  // ✅ Use calculated multiplier from real data
+              const mult = idx === 0 ? monMultiplier : linkMultiplier // ✅ Use calculated multiplier from real data
               const up = mult > 1
               const multDisplay = isFinite(mult) && mult !== 0 ? mult.toFixed(2) : "-"
               return (

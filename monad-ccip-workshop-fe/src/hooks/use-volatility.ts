@@ -39,7 +39,7 @@ export function useVolatility() {
       setVolatility({
         score: newScore,
         trend,
-        multiplier: 1.0 + (newScore - 50) / 100, // Calculate multiplier based on score
+        multiplier: getDripMultiplier(), // Use the correct multiplier based on score brackets
         refillDecision: newScore > 70 ? 1 : 0, // Simple refill decision logic
         lastUpdate: new Date(),
         source: "BTC-based Crypto",
@@ -55,11 +55,14 @@ export function useVolatility() {
 
   // Calculate drip multiplier based on volatility score
   const getDripMultiplier = () => {
-    if (volatility.score <= 20) return 2.0 // Low volatility = higher drip
-    if (volatility.score <= 40) return 1.5
+    // FIXED: Match smart contract logic where higher volatility = higher drip
+    // Smart contract: drip = minDrip + (range * vol / 1000)
+    // This means volatility score directly correlates with drip amount
+    if (volatility.score <= 20) return 0.5 // Very low volatility = lower drip
+    if (volatility.score <= 40) return 0.7
     if (volatility.score <= 60) return 1.0 // Normal drip
-    if (volatility.score <= 80) return 0.7
-    return 0.5 // High volatility = lower drip
+    if (volatility.score <= 80) return 1.5
+    return 2.0 // Very high volatility = higher drip
   }
 
   const getVolatilityLevel = () => {
@@ -83,18 +86,18 @@ export function useVolatility() {
     const multiplier = getDripMultiplier()
 
     if (volatility.score <= 20) {
-      return `${level} volatility detected - increased drip amounts (${multiplier}x) to encourage testing`
+      return `${level} volatility detected - reduced drip amounts (${multiplier}x) to preserve reserves during stable periods`
     }
     if (volatility.score <= 40) {
-      return `${level} volatility - slightly increased drip amounts (${multiplier}x) for stable testing`
+      return `${level} volatility - slightly reduced drip amounts (${multiplier}x) for conservative distribution`
     }
     if (volatility.score <= 60) {
       return `${level} volatility - standard drip amounts (${multiplier}x) maintained`
     }
     if (volatility.score <= 80) {
-      return `${level} volatility - reduced drip amounts (${multiplier}x) to preserve reserves`
+      return `${level} volatility - increased drip amounts (${multiplier}x) due to market uncertainty`
     }
-    return `${level} volatility - minimal drip amounts (${multiplier}x) to protect faucet reserves`
+    return `${level} volatility - maximum drip amounts (${multiplier}x) to support users during volatile periods`
   }
 
   // Update volatility score programmatically (for CCIP updates)
@@ -107,7 +110,9 @@ export function useVolatility() {
     setVolatility({
       score: Math.max(1, Math.min(100, newScore)), // Clamp between 1-100
       trend,
-      multiplier: 1.0 + (newScore - 50) / 100, // Calculate multiplier based on score
+      // REMOVED: Incorrect multiplier calculation - multiplier should be calculated from actual drip rates
+      // multiplier: 1.0 + (newScore - 50) / 100, // Calculate multiplier based on score
+      multiplier: getDripMultiplier(), // Use the correct multiplier based on score brackets
       refillDecision: newScore > 70 ? 1 : 0, // Simple refill decision logic
       lastUpdate: new Date(),
       source: "BTC-based Crypto",
