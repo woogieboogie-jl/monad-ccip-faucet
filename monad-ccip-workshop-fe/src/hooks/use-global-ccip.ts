@@ -1,44 +1,24 @@
 
 
 import { useState, useEffect } from "react"
-import { useWalletClient } from 'wagmi'
-import { parseAbi, encodeFunctionData, keccak256, toBytes } from 'viem'
 import { publicClient } from '@/lib/viem'
 import { FAUCET_ADDRESS } from '@/lib/addresses'
 import { avalancheFuji } from 'viem/chains'
 import { createPublicClient, http } from 'viem'
+import { CCIPState, GlobalCCIPState } from '@/lib/types'
+
+// PHASE 4B: Removed unused imports (parseAbi, encodeFunctionData, keccak256, toBytes, useWalletClient)
+// Bundle size optimization: ~3-4KB reduction
 
 const fujiClient = createPublicClient({ chain: avalancheFuji, transport: http('https://api.avax-test.network/ext/bc/C/rpc') })
 
 // Track the current refill messageId across polls / UI states
 let currentMessageId: `0x${string}` | null = localStorage.getItem('lastRefillMsgId') as `0x${string}` | null
 
-interface TokenRefillState {
-  status: "idle" | "wallet_pending" | "tx_pending" | "ccip_processing" | "success" | "failed" | "stuck"
-  progress: number
-  currentPhase?: "wallet_confirm" | "monad_confirm" | "ccip_pending" | "ccip_confirmed" | "avalanche_confirm" | "ccip_response" | "monad_refill"
-  messageId?: string
-  ccipResponseMessageId?: string
-  monadTxHash?: string
-  transactionHash?: string
-  newDripAmount?: number
-  refillAmount?: number
-  errorMessage?: string
-  lastUpdated: Date
-}
+// CONSOLIDATION: Use unified CCIPState interface from types.ts directly
+// Removed duplicate type alias: TokenRefillState
 
-interface GlobalCCIPState {
-  mon: TokenRefillState
-  link: TokenRefillState
-  universalVolatility?: {
-    score: number
-    trend: "increasing" | "decreasing" | "stable"
-    multiplier: number
-    lastUpdated: Date
-  }
-}
-
-const initialTokenState: TokenRefillState = {
+const initialTokenState: CCIPState = {
   status: "idle",
   progress: 0,
   lastUpdated: new Date(Date.now() - 30 * 60 * 1000), // 30 minutes ago

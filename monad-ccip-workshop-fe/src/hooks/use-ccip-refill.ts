@@ -8,37 +8,13 @@ import { FAUCET_ADDRESS, HELPER_ADDRESS } from "@/lib/addresses"
 import { createPublicClient, http } from "viem"
 import { avalancheFuji } from "@/lib/chain"
 import { useBatchOperations } from "@/hooks/use-batch-operations"
+import { useRequireMonad } from '@/hooks/use-require-monad'
 import { useTokenState } from "@/store/faucet-store"
+import { CCIPState, CCIPPhase } from "@/lib/types"
 
-interface CCIPRefillState {
-  status: "idle" | "wallet_pending" | "tx_pending" | "ccip_processing" | "success" | "failed" | "stuck"
-  lastUpdated: Date
-  tankPercentage: number
-  isRefillNeeded: boolean
-  
-  // Transaction tracking - ENHANCED: Dual CCIP message support
-  monadTxHash?: string
-  avalancheTxHash?: string
-  ccipMessageId?: string // Outbound message (Monad → Avalanche)
-  ccipResponseMessageId?: string // Inbound message (Avalanche → Monad)
-  
-  // Progress tracking
-  progress: number
-  currentPhase?: "wallet_confirm" | "monad_confirm" | "ccip_pending" | "ccip_confirmed" | "avalanche_confirm" | "ccip_response" | "monad_refill"
-  
-  // Results
-  newDripAmount?: number
-  refillAmount?: number
-  errorMessage?: string
-  stuckPhase?: string
-  
-  volatilityData?: {
-    score: number
-    trend: "increasing" | "decreasing" | "stable"
-    multiplier: number
-    refillDecision: number
-  }
-}
+// CONSOLIDATION: Use unified CCIPState interface from types.ts directly
+// Removed duplicate type alias: CCIPRefillState
+// Additional fields specific to the refill hook are added inline where needed
 
 // CCIP Explorer API helpers
 const checkCCIPStatus = async (messageId: string) => {
@@ -82,8 +58,6 @@ const checkAvalancheTransaction = async (txHash: string) => {
 // Check contract refill state - PRIMARY GATE
 const checkContractRefillState = async (publicClient: any): Promise<boolean> => {
   try {
-    console.log(`🔍 Checking contract refillInProgress for ${FAUCET_ADDRESS}...`)
-    
     // REAL CONTRACT CALL: Check the on-chain refillInProgress flag
     const refillInProgress = await publicClient.readContract({
       address: FAUCET_ADDRESS as `0x${string}`,
@@ -91,7 +65,6 @@ const checkContractRefillState = async (publicClient: any): Promise<boolean> => 
       functionName: 'refillInProgress',
     }) as boolean
 
-    console.log(`✅ Contract refillInProgress result:`, refillInProgress)
     return refillInProgress
   } catch (error) {
     console.error("❌ Contract refill state check error:", error)
@@ -116,11 +89,9 @@ export function useCCIPRefill(
   // OPTIMIZED: Use batched contract state check instead of individual calls
   const checkContractRefillStateOptimized = async (): Promise<boolean> => {
     try {
-      console.log(`🔍 Checking contract refillInProgress for ${FAUCET_ADDRESS} (batched)...`)
-      
+      // PHASE 4D: Reduced console.log noise
       const contractState = await batchContractStateCheck()
       if (contractState) {
-        console.log(`✅ Batched contract refillInProgress result:`, contractState.refillInProgress)
         return contractState.refillInProgress
       } else {
         console.warn('⚠️ Batched contract state check failed, falling back to individual call')
@@ -139,7 +110,7 @@ export function useCCIPRefill(
   }
 
   // CRITICAL FIX #1: Initialize with contract-aware state instead of hard-coded "idle"
-  const [refillState, setRefillState] = useState<CCIPRefillState>(() => {
+  const [refillState, setRefillState] = useState<CCIPState>(() => {
     // Try to get initial state from localStorage first
     const savedState = localStorage.getItem(`ccip-refill-${tokenType}`)
     if (savedState) {
@@ -153,6 +124,7 @@ export function useCCIPRefill(
           progress: parsed.progress || 0,
           currentPhase: parsed.currentPhase,
           ccipMessageId: parsed.ccipMessageId,
+          hasOutboundMessage: parsed.hasOutboundMessage,
           monadTxHash: parsed.monadTxHash,
           avalancheTxHash: parsed.avalancheTxHash,
           errorMessage: parsed.errorMessage,
@@ -170,13 +142,14 @@ export function useCCIPRefill(
     tankPercentage: Math.round((currentTankBalance / maxTankBalance) * 100),
       isRefillNeeded: currentTankBalance < maxTankBalance * 0.3,
     progress: 0,
+    hasOutboundMessage: false,
     }
   })
 
   
 
   // Save state to localStorage
-  const saveState = (state: CCIPRefillState) => {
+  const saveState = (state: CCIPState) => {
     localStorage.setItem(`ccip-refill-${tokenType}`, JSON.stringify(state))
   }
 
@@ -192,12 +165,21 @@ export function useCCIPRefill(
       errorMessage: undefined,
       stuckPhase: undefined,
       volatilityData: undefined,
+      refillAmount: undefined,
+      newDripAmount: undefined,
       lastUpdated: new Date(),
       tankPercentage: refillState.tankPercentage,
       isRefillNeeded: refillState.isRefillNeeded,
+      hasOutboundMessage: false,
     }
     setRefillState(newState)
     localStorage.removeItem(`ccip-refill-${tokenType}`)
+  }
+
+  // Manual reset function for immediate button responsiveness
+  const manualReset = () => {
+    console.log(`🔄 Manual reset triggered for ${tokenType}`)
+    resetToIdle()
   }
 
   // Update tank percentage when balance changes
@@ -215,8 +197,8 @@ export function useCCIPRefill(
   }, [currentTankBalance, maxTankBalance])
 
   // ENHANCED: Dual CCIP message monitoring with proper phase transitions
-  const monitorCCIPTransaction = async (state: CCIPRefillState) => {
-    const updateState = (updates: Partial<CCIPRefillState>) => {
+  const monitorCCIPTransaction = async (state: CCIPState) => {
+    const updateState = (updates: Partial<CCIPState>) => {
       setRefillState(prev => {
         const newState = { ...prev, ...updates, lastUpdated: new Date() }
         saveState(newState)
@@ -229,7 +211,7 @@ export function useCCIPRefill(
     let attempts = 0
     const maxAttempts = 180 // 15 minutes with 5s intervals
     let msgIdAttempts = 0
-    const maxMsgIdAttempts = 3
+    const maxMsgIdAttempts = 6
     
     while (attempts < maxAttempts) {
       try {
@@ -238,8 +220,22 @@ export function useCCIPRefill(
           const receipt = await publicClient?.getTransactionReceipt({ hash: state.monadTxHash as `0x${string}` })
           if (receipt?.status === 'success') {
             // Try to extract real messageId (up to 3 times)
-            if (!state.ccipMessageId?.startsWith('0x') || state.ccipMessageId?.includes('temp')) {
-              const realCcipMessageId = extractCCIPMessageId(receipt.logs)
+            if (!state.ccipMessageId) {
+              let realCcipMessageId = extractCCIPMessageId(receipt.logs)
+
+              // Fallback: if receipt had no logs, query block logs
+              if (!realCcipMessageId && receipt.logs.length === 0) {
+                 try {
+                   const receiptBlock = receipt.blockHash as `0x${string}`
+                   const blkLogs = await publicClient!.getLogs({
+                     blockHash: receiptBlock,
+                     address: FAUCET_ADDRESS as `0x${string}`
+                   })
+                   realCcipMessageId = extractCCIPMessageId(blkLogs)
+                 } catch(e) {
+                   console.warn('Fallback getLogs failed', e)
+                 }
+              }
               if (realCcipMessageId) {
                 console.log(`🔄 Replacing temp messageId with real outbound messageId: ${realCcipMessageId}`)
                 updateState({ ccipMessageId: realCcipMessageId })
@@ -298,12 +294,11 @@ export function useCCIPRefill(
           
           // Check contract's refillInProgress state and tank balance
           const contractRefillInProgress = await checkContractRefillStateOptimized()
-          const newBalance = await checkTankBalance(tokenType)
           
-          console.log(`📊 Contract refill in progress: ${contractRefillInProgress}, balance change: ${newBalance} vs ${currentTankBalance}`)
+          console.log(`📊 Contract refill in progress: ${contractRefillInProgress}`)
           
-          if (!contractRefillInProgress && newBalance > currentTankBalance) {
-            const refillAmount = newBalance - currentTankBalance
+          if (!contractRefillInProgress) {
+            const refillAmount = currentTankBalance - currentTankBalance // No balance change, so refillAmount is 0
 
             // Derive new drip amount by querying reservoir status or estimating via balance change
             const baseAmount = tokenState.baseDripAmount || (tokenType === "mon" ? 1 : 2) // Use actual base drip from contract, fallback for safety
@@ -340,15 +335,20 @@ export function useCCIPRefill(
               onRefillComplete(volatilityMultiplier, refillAmount)
             }
             
-            // Auto-reset after 20 seconds
+            // Auto-reset after 10 seconds to make button responsive sooner
             setTimeout(() => {
+              console.log(`🔄 Auto-resetting ${tokenType} CCIP state after successful completion`)
               updateState({
                 status: "idle",
       progress: 0,
-                currentPhase: undefined
+                currentPhase: undefined,
+                ccipMessageId: undefined,
+                refillAmount: undefined,
+                newDripAmount: undefined,
+                volatilityData: undefined
               })
               localStorage.removeItem(`ccip-refill-${tokenType}`)
-            }, 20000)
+            }, 10000)
             
             return // Exit monitoring loop
           }
@@ -391,14 +391,10 @@ export function useCCIPRefill(
       
       console.warn("⚠️  No RefillTriggered event found in transaction logs")
       
-      // Fallback to demo messageId for testing if real extraction fails
-      const workingMessageIds = [
-        "0x5dbe4fe3c6d32d9fb129285e0de976aa028dc346f333d3edaf92f8c588a26914",
-        "0x8c589dff93d101bcd9028d231bfa2f7e6b2673296ec2ba369941fed20effb5b8"
-      ]
-      const fallbackId = workingMessageIds[Math.floor(Math.random() * workingMessageIds.length)]
-      console.log(`🎲 Using fallback demo messageId:`, fallbackId)
-      return fallbackId
+      // IMPROVED: Return null instead of demo messageId
+      // This allows progress bar to work without generating demo links
+      console.log(`⚠️  No RefillTriggered event found - will retry extraction`)
+      return null
     } catch (error) {
       console.error("❌ Error extracting CCIP messageId:", error)
       return null
@@ -437,10 +433,10 @@ export function useCCIPRefill(
       
       console.log(`⚠️  No VolatilityReceived event found, using fallback strategy`)
       
-             // Fallback: Generate a plausible response messageId for demo purposes
-       const fallbackResponseId = `0x${Math.random().toString(16).substr(2, 8)}resp${tokenType}${Date.now().toString(16).substr(-6)}`
-       console.log(`🎲 Using fallback response messageId: ${fallbackResponseId}`)
-       return fallbackResponseId
+      // IMPROVED: Return null instead of demo messageId
+      // This allows progress bar to work without generating demo links
+      console.log(`⚠️  No VolatilityReceived event found yet - will retry`)
+      return null
       
     } catch (error) {
       console.error("❌ Error extracting response messageId:", error)
@@ -620,12 +616,12 @@ export function useCCIPRefill(
       }
     }
     
-    // 3. Try to extract from recent contract events
+    // 3. Try to extract from recent contract events (more aggressive search)
     if (publicClient) {
       try {
         console.log(`🔍 Attempting to extract messageId from recent contract events`)
         const currentBlock = await publicClient.getBlockNumber()
-        const fromBlock = currentBlock - 1000n // Look back 1000 blocks
+        const fromBlock = currentBlock - 2000n // Look back 2000 blocks (more extensive search)
         
         const logs = await publicClient.getLogs({
           address: FAUCET_ADDRESS as `0x${string}`,
@@ -643,23 +639,22 @@ export function useCCIPRefill(
       }
       }
 
-    // 4. Fallback to demo messageId for UI consistency
-    const demoMessageId = `0x${Math.random().toString(16).substr(2, 8)}demo${tokenType}${Date.now().toString(16).substr(-6)}` as `0x${string}`
-    console.log(`⚠️  Using demo messageId as fallback: ${demoMessageId}`)
-    return demoMessageId
+    // 4. IMPROVED: Return undefined instead of demo messageId
+    // This will allow the progress bar to show without a clickable link
+    console.log(`⚠️  No real messageId found for ${tokenType} - progress bar will show without link`)
+    return undefined
   }
 
-  // Main trigger function - CRITICAL FIX #3: Immediate demo messageId assignment
+  const requireMonad = useRequireMonad()
+
   const triggerUniversalVolatilityAndRefill = async () => {
+    if (!requireMonad()) return
+
     if (!refillState.isRefillNeeded || refillState.status !== "idle") return
 
     console.log(`🚀 Starting ${tokenType} refill with immediate messageId assignment`)
     
-    // CRITICAL FIX #3: Assign demo messageId immediately for UI consistency
-    const immediateMessageId = `0x${Math.random().toString(16).substr(2, 8)}temp${tokenType}${Date.now().toString(16).substr(-6)}`
-    console.log(`📋 Assigning immediate demo messageId: ${immediateMessageId}`)
-
-    const updateState = (updates: Partial<CCIPRefillState>) => {
+    const updateState = (updates: Partial<CCIPState>) => {
       setRefillState(prev => {
         const newState = { ...prev, ...updates }
         saveState(newState)
@@ -691,7 +686,7 @@ export function useCCIPRefill(
         if (savedStateRaw) {
           try {
             const parsed = JSON.parse(savedStateRaw)
-            const restore: Partial<CCIPRefillState> = {
+            const restore: Partial<CCIPState> = {
               status: "ccip_processing",
               progress: Math.max(parsed.progress || 50, 50),
               currentPhase: parsed.currentPhase || "ccip_response",
@@ -718,14 +713,14 @@ export function useCCIPRefill(
 
       console.log(`✅ Contract allows new refill for ${tokenType}`)
 
-      // Start with wallet confirmation phase and immediate messageId
+      // Start with wallet confirmation phase
       updateState({
         status: "wallet_pending",
           progress: 0,
         currentPhase: "wallet_confirm",
         errorMessage: undefined,
-        volatilityData: undefined,
-        ccipMessageId: immediateMessageId, // CRITICAL FIX #3: Immediate assignment
+        ccipMessageId: undefined,
+        hasOutboundMessage: true,
       })
 
       // Use the real contract call instead of mock
@@ -747,7 +742,7 @@ export function useCCIPRefill(
         progress: 5,   // Tx sent
         currentPhase: "monad_confirm",
         monadTxHash: txHash,
-        // Keep existing messageId until we parse the real one
+        // messageId will be filled once we parse the real event
       })
 
       // Start monitoring process
@@ -756,6 +751,7 @@ export function useCCIPRefill(
         status: "tx_pending",
         currentPhase: "monad_confirm",
         monadTxHash: txHash,
+        hasOutboundMessage: true,
       })
 
     } catch (error) {
@@ -1093,6 +1089,7 @@ export function useCCIPRefill(
     refillState,
     triggerUniversalVolatilityAndRefill,
     resetToIdle,
+    manualReset,
     renounceStuckTransaction,
     copyToClipboard,
     openCCIPExplorer,

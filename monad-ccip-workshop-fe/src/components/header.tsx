@@ -1,10 +1,11 @@
-import { WalletButton } from './wallet-button'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import { Progress } from "@/components/ui/progress"
 import { TrendingUp, TrendingDown, Minus, Zap, MessageCircle, Info, Coins, Lock, Unlock, LogIn, LogOut, ExternalLink, Network, AlertTriangle } from "lucide-react"
 import { formatBalance } from "@/lib/utils"
 import { useGlobalCCIP } from "@/hooks/use-global-ccip"
 import { useNetworkSwitch } from "@/hooks/use-network-switch"
+import { useChainModal } from '@rainbow-me/rainbowkit'
+import { getCCIPPhaseText, getCCIPPhaseTooltip } from "@/lib/ccip-utils"
 
 interface WalletState {
   address: string | null
@@ -53,8 +54,17 @@ export function Header({
     isWrongNetwork,
     currentNetworkName,
     targetNetworkName,
-    openNetworkModal,
   } = useNetworkSwitch()
+  const { openChainModal } = useChainModal()
+
+  const handleNetworkSwitch = () => {
+    if (openChainModal) {
+      // Add a delay to ensure the modal doesn't get closed by re-renders
+      setTimeout(() => {
+        openChainModal()
+      }, 200)
+    }
+  }
 
   const getTrendIcon = () => {
     switch (volatility.trend) {
@@ -68,40 +78,6 @@ export function Header({
   }
 
   // Remove the duplicate getActiveRequest function - use the one from useGlobalCCIP
-
-  const getCCIPPhaseText = (phase?: string) => {
-    switch (phase) {
-      case "initializing":
-        return "⚡ Initializing..."
-      case "fetching_volatility":
-        return "🌐 Fetching volatility..."
-      case "processing_ccip":
-        return "📡 Processing..."
-      case "updating_rates":
-        return "⚡ Updating rates..."
-      case "vault_to_tank":
-        return "🔄 Refilling..."
-      default:
-        return "Processing..."
-    }
-  }
-
-  const getCCIPPhaseTooltip = (phase?: string) => {
-    switch (phase) {
-      case "initializing":
-        return "Initializing CCIP volatility request"
-      case "fetching_volatility":
-        return "Requesting BTC-based crypto volatility data"
-      case "processing_ccip":
-        return "Processing cross-chain response"
-      case "updating_rates":
-        return "Updating drip rates based on volatility"
-      case "vault_to_tank":
-        return "Transferring tokens from vault to tank"
-      default:
-        return "Processing cross-chain volatility request"
-    }
-  }
 
   // Simplified wallet address display
   const getWalletDisplayText = () => {
@@ -207,7 +183,7 @@ export function Header({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  onClick={openNetworkModal}
+                  onClick={handleNetworkSwitch}
                   className={`flex items-center justify-center w-8 h-8 rounded-lg border transition-all duration-200 ${
                     isWrongNetwork
                       ? 'bg-red-500/20 border-red-400/40 hover:bg-red-500/30'
@@ -311,7 +287,8 @@ export function Header({
               </button>
             )}
             
-            {/* Demo Mode Toggle - Icon Only */}
+            {/* Demo Mode Toggle - Icon Only (Admin Only) */}
+            {wallet.isConnected && wallet.isOwner && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                 <button
@@ -331,6 +308,7 @@ export function Header({
                 </p>
                 </TooltipContent>
               </Tooltip>
+            )}
               </div>
             </div>
       </header>

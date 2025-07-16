@@ -72,6 +72,9 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
     // dispensablePool < dripRate * thresholdFactor.
     uint256 public thresholdFactor = 10; // default same logic as before (dripRate * 10 ~= 20%)
 
+    // Capacity multiplier: reservoirCapacity = dripRate × thresholdFactor × capacityFactor
+    uint256 public capacityFactor = 5; // default 5 ⇒ capacity = 5 × threshold
+
     // Base drip rates set at deployment - these never change and represent the initial values
     uint256 public BASEMONDRIPRATE;  // Initial MON drip rate from deployment
     uint256 public BASELINKDRIPRATE; // Initial LINK drip rate from deployment
@@ -81,6 +84,9 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
     
     /// @notice Emitted when reservoir capacity is updated by the owner.
     event ReservoirCapacityUpdated(address indexed token, uint256 newCapacity);
+
+    /// @notice Emitted when the capacity factor is updated by the owner.
+    event CapacityFactorUpdated(uint256 newFactor);
     
     /// @notice Emitted when owner withdraws tokens from treasury.
     event EmergencyWithdrawal(address indexed token, address indexed to, uint256 amount);
@@ -88,8 +94,9 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
     /// @notice Mutex to prevent multiple concurrent refill requests.
     bool public refillInProgress;
 
-    // Pending messageIds => true
-    mapping(bytes32 => bool) public pendingMessages;
+    // Pending messageIds => requested asset flags
+    struct PendingFlags { bool mon; bool link; }
+    mapping(bytes32 => PendingFlags) public pendingRequests;
 
     // Cross-chain / CCIP
     IRouterClient public immutable router;
@@ -130,14 +137,13 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         fujiChainSelector = _fujiSelector;
         LINK = IERC20(_link);
         trustedSenders[_fujiSelector] = _volatilityHelper;
-        // Init drip rates - but don't auto-fill reservoirs from treasury
-        // Treasury funds should only move to reservoir via CCIP responses or manual refill
         monRes.dripRate = _initialMonDrip;
         linkRes.dripRate = _initialLinkDrip;
-        // REMOVED: _topUpNativeReservoir();
-        // REMOVED: _topUpReservoir(linkRes, LINK, linkReservoirCapacity);
         BASEMONDRIPRATE = _initialMonDrip;
         BASELINKDRIPRATE = _initialLinkDrip;
+
+        // Derive initial capacities from factors so they start consistent
+        _recalculateCaps();
     }
 
     // =============================================================
@@ -164,6 +170,7 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
 
     /// @notice Anyone can call; reverts if refill not required.
     function triggerRefillCheck() external payable {
+
         // Need refill?
         bool needMon = _belowThreshold(monRes);
         bool needLink = _belowThreshold(linkRes);
@@ -198,9 +205,9 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         // Send message - this can revert if router rejects
         bytes32 messageId = router.ccipSend(fujiChainSelector, msgData);
         
-        // Only set flags AFTER successful router acceptance
+        // Record which reservoirs need refilling for this message
         refillInProgress = true;
-        pendingMessages[messageId] = true;
+        pendingRequests[messageId] = PendingFlags({mon: needMon, link: needLink});
         emit RefillTriggered(messageId);
     }
 
@@ -217,15 +224,15 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         (bytes32 requestId, uint256 volatility) = abi.decode(message.data, (bytes32, uint256));
 
         // Ensure this reply corresponds to an outstanding request we actually sent
-        require(pendingMessages[requestId], "Unknown requestId");
+        PendingFlags memory flags = pendingRequests[requestId];
+        require(flags.mon || flags.link, "Unknown requestId");
         
         // Clear the original request from pending and the refill mutex
-        // We know this is a valid reply because:
-        // 1. It came from our trusted VolatilityHelper 
-        // 2. It contains a requestId that matches a message we sent
-        // 3. Only one request can be in flight due to refillInProgress mutex
-        delete pendingMessages[requestId];
+        delete pendingRequests[requestId];
         refillInProgress = false;
+
+        // Emit the volatility score for the front-end to consume
+        emit VolatilityReceived(message.messageId, volatility);
 
         // Example: Map volatility (0-1000) to dripRate scale
         // Map volatility to drip using **direct** correlation (higher vol => higher drip)
@@ -236,21 +243,26 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         // Safety checks: ensure drip rates don't exceed reasonable limits
         uint256 maxMonDrip = monReservoirCapacity / (thresholdFactor + 5); // Leave some buffer
         uint256 maxLinkDrip = linkReservoirCapacity / (thresholdFactor + 5);
-        
+
         if (newMonDrip > maxMonDrip) newMonDrip = maxMonDrip;
         if (newLinkDrip > maxLinkDrip) newLinkDrip = maxLinkDrip;
 
-        // Refill reservoirs & update drip rates
-        _topUpNativeReservoir();
-        monRes.dripRate = newMonDrip;
-        emit ReservoirRefilled(address(0), newMonDrip, monRes.dispensablePool); // address(0) for MON
+        // Refill only the reservoirs that were requested
+        if (flags.mon) {
+            _topUpNativeReservoir();
+            monRes.dripRate = newMonDrip;
+            emit ReservoirRefilled(address(0), newMonDrip, monRes.dispensablePool); // address(0) for MON
+        }
 
-        _topUpReservoir(linkRes, LINK, linkReservoirCapacity);
-        linkRes.dripRate = newLinkDrip;
-        emit ReservoirRefilled(address(LINK), newLinkDrip, linkRes.dispensablePool);
+        if (flags.link) {
+            _topUpReservoir(linkRes, LINK, linkReservoirCapacity);
+            linkRes.dripRate = newLinkDrip;
+            emit ReservoirRefilled(address(LINK), newLinkDrip, linkRes.dispensablePool);
+        }
 
-        // Emit the volatility score for the front-end to consume
-        emit VolatilityReceived(message.messageId, volatility);
+        // Update capacities after drip rate changes so ratios hold
+        _recalculateCaps();
+ 
     }
 
     // =============================================================
@@ -348,6 +360,15 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         uint256 range = maxDrip - minDrip;
         uint256 drip = minDrip + (range * vol / 1000);
         return drip;
+    }
+
+    // -------------------------------------------------------------
+    // Internal helper: recompute MON & LINK reservoir capacities
+    // capacity = dripRate × thresholdFactor × capacityFactor
+    // -------------------------------------------------------------
+    function _recalculateCaps() internal {
+        monReservoirCapacity  = monRes.dripRate  * thresholdFactor * capacityFactor;
+        linkReservoirCapacity = linkRes.dripRate * thresholdFactor * capacityFactor;
     }
 
     // =============================================================
@@ -463,7 +484,8 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         pendingStates = new bool[](messageIds.length);
         
         for (uint256 i = 0; i < messageIds.length; i++) {
-            pendingStates[i] = pendingMessages[messageIds[i]];
+            PendingFlags memory flags = pendingRequests[messageIds[i]];
+            pendingStates[i] = flags.mon || flags.link;
         }
         
         return (isRefillInProgress, pendingStates);
@@ -486,6 +508,18 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         require(newFactor > 0, "factor zero");
         thresholdFactor = newFactor;
         emit ThresholdFactorUpdated(newFactor);
+
+        // Keep capacities aligned with new threshold
+        _recalculateCaps();
+    }
+
+    /// @notice Owner can update the capacityFactor (multiplier applied to threshold).
+    ///         Reservoir capacity = dripRate × thresholdFactor × capacityFactor.
+    function setCapacityFactor(uint256 newFactor) external onlyOwner {
+        require(newFactor > 0, "factor zero");
+        capacityFactor = newFactor;
+        emit CapacityFactorUpdated(newFactor);
+        _recalculateCaps();
     }
 
     /// @notice Emergency function to reset refill state if CCIP gets stuck
@@ -497,7 +531,7 @@ contract Faucet is CCIPReceiver, Ownable(msg.sender) {
         
         // Clear specific pending messages if provided
         for (uint256 i = 0; i < messageIds.length; i++) {
-            delete pendingMessages[messageIds[i]];
+            delete pendingRequests[messageIds[i]];
         }
         
         emit RefillStateReset(messageIds.length);

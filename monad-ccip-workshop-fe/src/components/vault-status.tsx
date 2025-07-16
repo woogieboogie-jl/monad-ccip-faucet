@@ -15,6 +15,7 @@ import { useFaucet } from "@/hooks/use-faucet"
 import { useStatus } from "@/hooks/use-status"
 // Dynamic vault thresholds: critical = next refill amount, warning = 10× refill amount
 import { FAUCET_ADDRESS } from "@/lib/addresses"
+import { invalidateAllFaucetCache } from '@/lib/request-cache'
 
 // Optional helper address from env
 const HELPER_ADDRESS: string | undefined = import.meta.env.VITE_HELPER_ADDRESS
@@ -78,7 +79,11 @@ function VaultStatusComponent({ isOwner }: VaultStatusProps) {
   const handleRefreshBalances = async () => {
     setIsRefreshing(true)
     try {
-      // DEBUG: Test the contract call directly
+      // CRITICAL FIX: Comprehensive cache invalidation for admin refresh
+      console.log('🗑️ Admin refresh: Invalidating all faucet cache...')
+      invalidateAllFaucetCache()
+      
+      // DEBUG: Test the contract call directly to verify cache bypass
       console.log('🔍 Testing getTreasuryStatus contract call directly...')
       const testResult = await publicClient.readContract({
         address: FAUCET_ADDRESS as `0x${string}`,
@@ -87,9 +92,25 @@ function VaultStatusComponent({ isOwner }: VaultStatusProps) {
       })
       console.log('🔍 Direct contract call result:', testResult)
       
+      // Log current vault balances before refresh
+      console.log('📊 Current vault balances before refresh:', {
+        vaultMon: faucet.vaultMon,
+        vaultLink: faucet.vaultLink
+      })
+      
       await refreshVaultBalances()
+      
+      // Log vault balances after refresh (with small delay to ensure state update)
+      setTimeout(() => {
+        console.log('📊 Vault balances after refresh:', {
+          vaultMon: faucet.vaultMon,
+          vaultLink: faucet.vaultLink
+        })
+      }, 100)
+      
+      console.log('✅ Admin refresh: Vault balances refreshed successfully from blockchain')
     } catch (error) {
-      console.error('Failed to refresh vault balances:', error)
+      console.error('❌ Admin refresh failed:', error)
     } finally {
       setIsRefreshing(false)
     }
@@ -135,8 +156,8 @@ function VaultStatusComponent({ isOwner }: VaultStatusProps) {
                 <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>
-              <p>Refresh vault balances from blockchain</p>
+            <TooltipContent className="z-[9999]" side="top" sideOffset={5}>
+              <p className="font-body text-xs">Force refresh vault balances from blockchain (bypasses cache)</p>
             </TooltipContent>
           </Tooltip>
         </div>

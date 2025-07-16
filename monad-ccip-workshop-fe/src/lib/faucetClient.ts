@@ -17,14 +17,17 @@ const faucetAbi = parseAbi([
   'function BASELINKDRIPRATE() view returns (uint256)',
   // User-specific timestamps
   'function lastClaimMon(address) view returns (uint256)',
-  'function lastClaimLink(address) view returns (uint256)'
+  'function lastClaimLink(address) view returns (uint256)',
+  // Owner function from Ownable
+  'function owner() view returns (address)'
 ])
 
 export interface FaucetSnapshot {
-  mon: { pool: bigint; drip: bigint; baseDrip: bigint }
-  link: { pool: bigint; drip: bigint; baseDrip: bigint }
+  mon: { pool: bigint; drip: bigint; baseDrip: bigint; capacity: bigint }
+  link: { pool: bigint; drip: bigint; baseDrip: bigint; capacity: bigint }
   treasury: { mon: bigint; link: bigint }
   constants: { cooldown: number; thresholdFactor: number }
+  owner: string
   lastClaim?: { mon: bigint; link: bigint }
 }
 
@@ -120,6 +123,18 @@ export async function getFaucetSnapshot(user?: `0x${string}`): Promise<FaucetSna
       [],
       10 * 60 * 1000 // 10 minutes
     ),
+    
+    // Owner never changes - very long cache (10 minutes)
+    cachedContractRead(
+      'owner',
+      () => publicClient.readContract({
+        address: FAUCET_ADDRESS as `0x${string}`,
+        abi: faucetAbi,
+        functionName: 'owner',
+      }),
+      [],
+      10 * 60 * 1000 // 10 minutes
+    ),
   ]
 
   if (user) {
@@ -153,20 +168,21 @@ export async function getFaucetSnapshot(user?: `0x${string}`): Promise<FaucetSna
 
   const results = await Promise.all(calls)
 
-  const [reservoir, treasury, cooldownB, threshB, baseMonDripB, baseLinkDripB, ...claims] = results
+  const [reservoir, treasury, cooldownB, threshB, baseMonDripB, baseLinkDripB, owner, ...claims] = results
 
   const [monPool, monDrip, linkPool, linkDrip] = reservoir as [bigint, bigint, bigint, bigint]
   // FIXED: Properly destructure all 6 values from getTreasuryStatus: (monTreasury, monReservoir, linkTreasury, linkReservoir, monCapacity, linkCapacity)
   const [monTreasury, monReservoir, linkTreasury, linkReservoir, monCapacity, linkCapacity] = treasury as [bigint, bigint, bigint, bigint, bigint, bigint]
 
   return {
-    mon: { pool: monPool, drip: monDrip, baseDrip: baseMonDripB as bigint },
-    link: { pool: linkPool, drip: linkDrip, baseDrip: baseLinkDripB as bigint },
+    mon: { pool: monPool, drip: monDrip, baseDrip: baseMonDripB as bigint, capacity: monCapacity },
+    link: { pool: linkPool, drip: linkDrip, baseDrip: baseLinkDripB as bigint, capacity: linkCapacity },
     treasury: { mon: monTreasury, link: linkTreasury },
     constants: {
       cooldown: Number(cooldownB as bigint),
       thresholdFactor: Number(threshB as bigint),
     },
+    owner: owner as string, // Assuming owner is the last result
     lastClaim: user ? { mon: claims[0] as bigint, link: claims[1] as bigint } : undefined,
   }
 } 

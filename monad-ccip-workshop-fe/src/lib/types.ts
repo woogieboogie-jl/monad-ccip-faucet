@@ -16,6 +16,7 @@ export interface TokenState {
   requestCooldownTime: number
   isDripLoading: boolean
   isRequestLoading: boolean
+  isRefreshing: boolean // Show spinner when refreshing tank balance from contract
   contractAddress: string
   lowTankThreshold: number
 }
@@ -27,32 +28,108 @@ export interface FaucetState {
   vaultLink: number
 }
 
-// Volatility types
+// Volatility data structure
 export interface VolatilityData {
   score: number
   trend: "increasing" | "decreasing" | "stable"
-  lastUpdate: Date
-  source: string
+  multiplier: number
+  refillDecision: number
 }
 
+// CCIP Phase types - consolidated from all sources
+export type CCIPPhase = 
+  | "wallet_confirm" 
+  | "monad_confirm" 
+  | "ccip_pending" 
+  | "ccip_confirmed" 
+  | "avalanche_confirm" 
+  | "ccip_response" 
+  | "monad_refill"
+  | "initializing"
+  | "fetching_volatility"
+  | "processing_ccip"
+  | "updating_rates"
+  | "vault_to_tank"
+
+// CCIP Status types - consolidated from all sources
+export type CCIPStatus = 
+  | "idle" 
+  | "wallet_pending" 
+  | "tx_pending" 
+  | "ccip_processing" 
+  | "success" 
+  | "failed" 
+  | "stuck"
+  | "pending"  // For backward compatibility
+  | "completed" // For backward compatibility
+
+// CONSOLIDATED: Unified CCIP State Interface
+// This replaces all fragmented interfaces across the codebase
+export interface CCIPState {
+  // Core status and progress
+  status: CCIPStatus
+  progress: number
+  currentPhase?: CCIPPhase
+  lastUpdated: Date
+  
+  // Transaction tracking - Enhanced dual CCIP message support
+  messageId?: string // Primary messageId (for backward compatibility)
+  ccipMessageId?: string // Outbound message (Monad → Avalanche)
+  ccipResponseMessageId?: string // Inbound message (Avalanche → Monad)
+  monadTxHash?: string
+  avalancheTxHash?: string
+  transactionHash?: string // For backward compatibility
+  
+  // State management
+  tankPercentage?: number
+  isRefillNeeded?: boolean
+  hasOutboundMessage?: boolean // indicates tx broadcast but real messageId not yet known
+  
+  // Results and completion data
+  newDripAmount?: number
+  refillAmount?: number
+  volatilityData?: VolatilityData
+  
+  // Error handling
+  errorMessage?: string
+  stuckPhase?: string
+}
+
+// CONSOLIDATED: Global CCIP State
+export interface GlobalCCIPState {
+  mon: CCIPState
+  link: CCIPState
+  universalVolatility?: {
+    score: number
+    trend: "increasing" | "decreasing" | "stable"
+    multiplier: number
+    lastUpdated: Date
+  }
+}
+
+// CONSOLIDATION: Global volatility state interface
 export interface GlobalVolatilityState {
   multiplier: number
   lastUpdated: Date
   isUpdating: boolean
 }
 
-// CCIP types
-export interface CCIPState {
-  status: "idle" | "pending" | "completed" | "failed"
-  progress: number
-  currentPhase?: string
-  messageId?: string
-  lastUpdated: Date
+// CCIP Monitoring Configuration
+export interface CCIPMonitorConfig {
+  messageId: string
+  tokenType: 'mon' | 'link'
+  currentPhase: string
+  onPhaseUpdate: (phase: string, progress: number, data?: any) => void
+  onComplete: (result: any) => void
+  onError: (error: string) => void
 }
 
-export interface GlobalCCIPState {
-  mon: CCIPState
-  link: CCIPState
+// CCIP Monitoring State
+export interface CCIPMonitoringState {
+  isActive: boolean
+  lastBlockChecked: bigint
+  failureCount: number
+  nextCheckTime: number
 }
 
 // UI Component types

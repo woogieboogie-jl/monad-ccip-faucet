@@ -1,60 +1,18 @@
 import { create } from 'zustand'
 import { devtools, persist, subscribeWithSelector } from 'zustand/middleware'
 import { immer } from 'zustand/middleware/immer'
+import { TokenState, CCIPState, VolatilityData, CCIPPhase } from '@/lib/types'
 
-// Types
-interface TokenState {
-  tankBalance: number
-  maxTankBalance: number
-  baseDripAmount: number
-  currentDripAmount: number
-  dripCooldownTime: number
-  requestCooldownTime: number
-  isDripLoading: boolean
-  isRequestLoading: boolean
-  contractAddress: string
-  lowTankThreshold: number
-}
-
-interface CCIPState {
-  status: "idle" | "wallet_pending" | "tx_pending" | "ccip_processing" | "success" | "failed" | "stuck"
-  progress: number
-  currentPhase?: string
-  messageId?: string
-  ccipResponseMessageId?: string
-  errorMessage?: string
-  lastUpdated: Date
-  
-  // CONSOLIDATION: Additional fields from useCCIPRefill for complete state management
-  tankPercentage?: number
-  isRefillNeeded?: boolean
-  
-  // Transaction tracking - Enhanced dual CCIP message support
-  monadTxHash?: string
-  avalancheTxHash?: string
-  
-  // Results
-  newDripAmount?: number
-  refillAmount?: number
-  stuckPhase?: string
-  
-  // Volatility data from CCIP response
-  volatilityData?: {
-    score: number
-    trend: "increasing" | "decreasing" | "stable"
-    multiplier: number
-    refillDecision: number
-  }
-}
-
-interface FaucetState {
+// CONSOLIDATION: Use unified interfaces from types.ts instead of local duplicates
+// Renamed to FaucetStoreState to distinguish from external FaucetState interface
+interface FaucetStoreState {
   // Token states
   tokens: {
     mon: TokenState
     link: TokenState
   }
   
-  // CCIP states
+  // CCIP states - using unified interface
   ccip: {
     mon: CCIPState
     link: CCIPState
@@ -94,15 +52,15 @@ interface FaucetActions {
   resetCCIPState: (token: 'mon' | 'link') => void
   
   // CONSOLIDATION: Enhanced CCIP operations for complete state management
-  setCCIPProgress: (token: 'mon' | 'link', progress: number, phase?: string) => void
-  setCCIPResult: (token: 'mon' | 'link', result: { newDripAmount?: number; refillAmount?: number; volatilityData?: CCIPState['volatilityData'] }) => void
+  setCCIPProgress: (token: 'mon' | 'link', progress: number, phase?: CCIPPhase) => void
+  setCCIPResult: (token: 'mon' | 'link', result: { newDripAmount?: number; refillAmount?: number; volatilityData?: VolatilityData }) => void
   setCCIPError: (token: 'mon' | 'link', error: string, stuckPhase?: string) => void
   
   // Vault operations
   updateVaultBalance: (token: 'mon' | 'link', balance: number) => void
   
   // Volatility operations
-  updateVolatility: (updates: Partial<FaucetState['volatility']>) => void
+  updateVolatility: (updates: Partial<FaucetStoreState['volatility']>) => void
   
   // CONSOLIDATION: Volatility utility functions (moved from useVolatility hook)
   getDripMultiplier: () => number
@@ -137,6 +95,7 @@ const initialTokenState: TokenState = {
   requestCooldownTime: 0,
   isDripLoading: false,
   isRequestLoading: false,
+  isRefreshing: false,
   contractAddress: '',
   lowTankThreshold: 30, // 30% of capacity
 }
@@ -148,7 +107,7 @@ const initialCCIPState: CCIPState = {
   ccipResponseMessageId: undefined,
 }
 
-const initialState: FaucetState = {
+const initialState: FaucetStoreState = {
   tokens: {
     mon: { ...initialTokenState },
     link: { ...initialTokenState },
@@ -178,7 +137,7 @@ const initialState: FaucetState = {
 // Global cooldown timer reference
 let cooldownInterval: NodeJS.Timeout | null = null
 
-export const useFaucetStore = create<FaucetState & FaucetActions>()(
+export const useFaucetStore = create<FaucetStoreState & FaucetActions>()(
   devtools(
     persist(
       subscribeWithSelector(
@@ -242,30 +201,28 @@ export const useFaucetStore = create<FaucetState & FaucetActions>()(
           // Volatility operations
           updateVolatility: (updates) =>
             set((state) => {
-              Object.assign(state.volatility, updates, { lastUpdated: new Date() })
+              Object.assign(state.volatility, updates)
             }),
           
           // CONSOLIDATION: Volatility utility functions (moved from useVolatility hook)
           getDripMultiplier: () => {
-            const score = get().volatility.score
-            if (score <= 20) return 2.0 // Low volatility = higher drip
-            if (score <= 40) return 1.5
-            if (score <= 60) return 1.0 // Normal drip
-            if (score <= 80) return 0.7
-            return 0.5 // High volatility = lower drip
+            const state = get()
+            return state.volatility.multiplier
           },
           
           getVolatilityLevel: () => {
-            const score = get().volatility.score
+            const state = get()
+            const score = state.volatility.score
             if (score <= 20) return "Very Low"
             if (score <= 40) return "Low"
-            if (score <= 60) return "Moderate"
+            if (score <= 60) return "Medium"
             if (score <= 80) return "High"
             return "Very High"
           },
           
           getVolatilityColor: () => {
-            const score = get().volatility.score
+            const state = get()
+            const score = state.volatility.score
             if (score <= 20) return "text-green-400"
             if (score <= 40) return "text-green-300"
             if (score <= 60) return "text-yellow-400"
@@ -276,53 +233,30 @@ export const useFaucetStore = create<FaucetState & FaucetActions>()(
           getDripReasoning: () => {
             const state = get()
             const score = state.volatility.score
-            const level = state.getVolatilityLevel()
-            const multiplier = state.getDripMultiplier()
-
-            if (score <= 20) {
-              return `${level} volatility detected - increased drip amounts (${multiplier}x) to encourage testing`
-            }
-            if (score <= 40) {
-              return `${level} volatility - slightly increased drip amounts (${multiplier}x) for stable testing`
-            }
-            if (score <= 60) {
-              return `${level} volatility - standard drip amounts (${multiplier}x) maintained`
-            }
-            if (score <= 80) {
-              return `${level} volatility - reduced drip amounts (${multiplier}x) to preserve reserves`
-            }
-            return `${level} volatility - minimal drip amounts (${multiplier}x) to protect faucet reserves`
+            if (score <= 20) return "Market is stable - standard drip rates"
+            if (score <= 40) return "Low volatility - slightly reduced drip rates"
+            if (score <= 60) return "Medium volatility - moderate drip adjustments"
+            if (score <= 80) return "High volatility - increased drip rates"
+            return "Very high volatility - maximum drip rates"
           },
           
           updateVolatilityScore: (newScore) =>
             set((state) => {
               const currentScore = state.volatility.score
-              const clampedScore = Math.max(1, Math.min(100, newScore)) // Clamp between 1-100
-              
               let trend: "increasing" | "decreasing" | "stable" = "stable"
-              if (clampedScore > currentScore + 5) trend = "increasing"
-              else if (clampedScore < currentScore - 5) trend = "decreasing"
+              if (newScore > currentScore + 5) trend = "increasing"
+              else if (newScore < currentScore - 5) trend = "decreasing"
               
-              state.volatility.score = clampedScore
+              state.volatility.score = Math.max(1, Math.min(100, newScore))
               state.volatility.trend = trend
+              state.volatility.multiplier = 1.0 + (newScore - 50) / 100
               state.volatility.lastUpdated = new Date()
-              
-              // Update multiplier based on new score
-              state.volatility.multiplier = state.getDripMultiplier()
             }),
           
           // UI operations
           setCopiedAddress: (address, copied) =>
             set((state) => {
               state.ui.copiedAddresses[address] = copied
-              if (copied) {
-                // Auto-clear after 2 seconds
-                setTimeout(() => {
-                  set((state) => {
-                    state.ui.copiedAddresses[address] = false
-                  })
-                }, 2000)
-              }
             }),
             
           setDripState: (token, active) =>
@@ -342,20 +276,31 @@ export const useFaucetStore = create<FaucetState & FaucetActions>()(
               if (updates.link) Object.assign(state.tokens.link, updates.link)
             }),
           
-          // Centralized cooldown management
+          // PHASE 4C: Optimized cooldown management
           startCooldownTimer: () => {
-            // Prevent multiple timers
-            if (cooldownInterval) return
+            if (cooldownInterval) return // Already running
             
-            console.log('🕐 Starting centralized cooldown timer')
             cooldownInterval = setInterval(() => {
-              get().updateCooldowns()
+              const state = get()
+              const hasMonCooldowns = state.tokens.mon.dripCooldownTime > 0 || state.tokens.mon.requestCooldownTime > 0
+              const hasLinkCooldowns = state.tokens.link.dripCooldownTime > 0 || state.tokens.link.requestCooldownTime > 0
+              
+              if (!hasMonCooldowns && !hasLinkCooldowns) {
+                // Auto-stop timer when no cooldowns are active
+                if (cooldownInterval) {
+                  clearInterval(cooldownInterval)
+                  cooldownInterval = null
+                }
+                return
+              }
+              
+              // Update cooldowns
+              state.updateCooldowns()
             }, 1000)
           },
           
           stopCooldownTimer: () => {
             if (cooldownInterval) {
-              console.log('⏹️ Stopping centralized cooldown timer')
               clearInterval(cooldownInterval)
               cooldownInterval = null
             }
@@ -395,14 +340,55 @@ export const useFaucetStore = create<FaucetState & FaucetActions>()(
       ),
       {
         name: 'faucet-store',
+        // PHASE 4C: Optimized persistence - only persist essential data
         partialize: (state) => ({
-          // Only persist certain parts
-          volatility: state.volatility,
-          ccip: state.ccip,
+          // Only persist essential long-term data
+          volatility: {
+            score: state.volatility.score,
+            trend: state.volatility.trend,
+            multiplier: state.volatility.multiplier,
+            lastUpdated: state.volatility.lastUpdated,
+            // Don't persist isUpdating (transient state)
+          },
+          ccip: {
+            mon: {
+              status: state.ccip.mon.status,
+              progress: state.ccip.mon.progress,
+              currentPhase: state.ccip.mon.currentPhase,
+              ccipMessageId: state.ccip.mon.ccipMessageId,
+              ccipResponseMessageId: state.ccip.mon.ccipResponseMessageId,
+              monadTxHash: state.ccip.mon.monadTxHash,
+              // Don't persist lastUpdated (will be regenerated)
+            },
+            link: {
+              status: state.ccip.link.status,
+              progress: state.ccip.link.progress,
+              currentPhase: state.ccip.link.currentPhase,
+              ccipMessageId: state.ccip.link.ccipMessageId,
+              ccipResponseMessageId: state.ccip.link.ccipResponseMessageId,
+              monadTxHash: state.ccip.link.monadTxHash,
+            },
+          },
+          // Don't persist tokens (will be refreshed from contract)
+          // Don't persist vaults (will be refreshed from contract)
+          // Don't persist ui (transient state)
         }),
+        // PHASE 4C: Add storage event handling for better multi-tab sync
+        onRehydrateStorage: () => (state) => {
+          if (state) {
+            // Restore lastUpdated dates after rehydration
+            state.volatility.lastUpdated = new Date(state.volatility.lastUpdated)
+            state.ccip.mon.lastUpdated = new Date()
+            state.ccip.link.lastUpdated = new Date()
+          }
+        },
       }
     ),
-    { name: 'faucet-store' }
+    { 
+      name: 'faucet-store',
+      // PHASE 4C: Optimize devtools for production
+      enabled: process.env.NODE_ENV === 'development',
+    }
   )
 )
 

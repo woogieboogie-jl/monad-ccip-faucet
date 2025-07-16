@@ -1,41 +1,79 @@
 import { useState, useEffect } from 'react'
-import { useAccount, useChainId, useSwitchChain } from 'wagmi'
+import { useAccount, useChainId, useSwitchChain, useWalletClient } from 'wagmi'
 import { monadTestnet } from '@/lib/chain'
 
+// CONSOLIDATION: NetworkSwitchState is specific to this hook only, so keeping it local
+// If this interface is used elsewhere, it should be moved to types.ts
 interface NetworkSwitchState {
   isWrongNetwork: boolean
-  isNetworkModalOpen: boolean
-  isSwitching: boolean
-  switchError: string | null
   currentChainId: number | undefined
   targetChainId: number
   targetChainName: string
 }
 
+// Get the actual wallet chain ID, bypassing Wagmi's normalization
+function getActualChainId(wagmiChainId: number | undefined, walletClient: any): number | undefined {
+  // Use window.ethereum.chainId as primary source since it's the only reliable way
+  // to detect when wallet is on unsupported chains. Wagmi normalizes unsupported chains
+  // to the first configured chain, which is misleading.
+  const windowChainId = typeof window !== 'undefined' && (window as any).ethereum?.chainId 
+    ? parseInt((window as any).ethereum.chainId, 16) 
+    : undefined
+  
+  return windowChainId ?? walletClient?.chain?.id ?? wagmiChainId
+}
+
 export function useNetworkSwitch() {
   const { isConnected } = useAccount()
-  const chainId = useChainId()
-  const { switchChain, isPending: isSwitchPending, error: switchError } = useSwitchChain()
+  const fallbackChainId = useChainId()
+  const { data: walletClient } = useWalletClient({})
   
   const [state, setState] = useState<NetworkSwitchState>({
     isWrongNetwork: false,
-    isNetworkModalOpen: false,
-    isSwitching: false,
-    switchError: null,
     currentChainId: undefined,
     targetChainId: monadTestnet.id,
     targetChainName: monadTestnet.name,
   })
 
+  // Listen for chain changes directly from window.ethereum
+  useEffect(() => {
+    const handleChainChanged = (chainId: string) => {
+      const newChainId = parseInt(chainId, 16)
+      console.log('[useNetworkSwitch] chain changed event', { newChainId, required: monadTestnet.id })
+      
+      setState(prev => ({
+        ...prev,
+        currentChainId: newChainId,
+        isWrongNetwork: newChainId !== monadTestnet.id,
+      }))
+    }
+
+    if (typeof window !== 'undefined' && (window as any).ethereum) {
+      (window as any).ethereum.on('chainChanged', handleChainChanged)
+      
+      return () => {
+        (window as any).ethereum?.removeListener('chainChanged', handleChainChanged)
+      }
+    }
+  }, [])
+
   // Check if user is on wrong network
   useEffect(() => {
-    if (isConnected && chainId) {
-      const isWrongNetwork = chainId !== monadTestnet.id
+    const actualChainId = getActualChainId(fallbackChainId, walletClient)
+    
+    if (isConnected && actualChainId) {
+      const isWrongNetwork = actualChainId !== monadTestnet.id
+      
+      console.log('[useNetworkSwitch] network check', {
+        actual: actualChainId,
+        required: monadTestnet.id,
+        isWrongNetwork,
+      })
+      
       setState(prev => ({
         ...prev,
         isWrongNetwork,
-        currentChainId: chainId,
-        isNetworkModalOpen: isWrongNetwork && !prev.isNetworkModalOpen ? true : prev.isNetworkModalOpen,
+        currentChainId: actualChainId,
       }))
     } else {
       setState(prev => ({
@@ -44,70 +82,14 @@ export function useNetworkSwitch() {
         currentChainId: undefined,
       }))
     }
-  }, [isConnected, chainId])
-
-  // Handle switch chain loading state
-  useEffect(() => {
-    setState(prev => ({
-      ...prev,
-      isSwitching: isSwitchPending,
-      switchError: switchError?.message || null,
-    }))
-  }, [isSwitchPending, switchError])
-
-  const handleSwitchNetwork = async () => {
-    try {
-      setState(prev => ({ ...prev, switchError: null }))
-      await switchChain({ chainId: monadTestnet.id })
-      // Modal will close automatically when network changes
-    } catch (error) {
-      console.error('Failed to switch network:', error)
-      setState(prev => ({
-        ...prev,
-        switchError: error instanceof Error ? error.message : 'Failed to switch network',
-      }))
-    }
-  }
-
-  const closeNetworkModal = () => {
-    setState(prev => ({ ...prev, isNetworkModalOpen: false }))
-  }
-
-  const openNetworkModal = () => {
-    setState(prev => ({ ...prev, isNetworkModalOpen: true }))
-  }
-
-  // Auto-close modal when network is correct
-  useEffect(() => {
-    if (!state.isWrongNetwork && state.isNetworkModalOpen) {
-      setState(prev => ({ ...prev, isNetworkModalOpen: false }))
-    }
-  }, [state.isWrongNetwork, state.isNetworkModalOpen])
+  }, [isConnected, fallbackChainId, walletClient])
 
   const getNetworkName = (chainId: number): string => {
-    switch (chainId) {
-      case 1: return 'Ethereum Mainnet'
-      case 11155111: return 'Sepolia Testnet'
-      case 137: return 'Polygon Mainnet'
-      case 80002: return 'Polygon Amoy Testnet'
-      case 42161: return 'Arbitrum One'
-      case 421614: return 'Arbitrum Sepolia'
-      case 10: return 'Optimism Mainnet'
-      case 11155420: return 'Optimism Sepolia'
-      case 8453: return 'Base Mainnet'
-      case 84532: return 'Base Sepolia'
-      case 43114: return 'Avalanche Mainnet'
-      case 43113: return 'Avalanche Fuji'
-      case monadTestnet.id: return monadTestnet.name
-      default: return `Chain ${chainId}`
-    }
+    return chainId === monadTestnet.id ? monadTestnet.name : 'Unsupported Network'
   }
 
   return {
     ...state,
-    handleSwitchNetwork,
-    closeNetworkModal,
-    openNetworkModal,
     currentNetworkName: state.currentChainId ? getNetworkName(state.currentChainId) : 'Unknown',
     targetNetworkName: state.targetChainName,
   }

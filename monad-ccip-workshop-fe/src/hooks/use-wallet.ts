@@ -1,13 +1,10 @@
 
 
 import { useState } from "react"
+import { WalletState } from '@/lib/types'
 
-interface WalletState {
-  address: string | null
-  isConnected: boolean
-  isOwner: boolean
-  monBalance: number // Add MON balance tracking
-}
+// CONSOLIDATION: Use unified WalletState interface from types.ts
+// Removed duplicate interface: WalletState
 
 export function useWallet() {
   const [wallet, setWallet] = useState<WalletState>({

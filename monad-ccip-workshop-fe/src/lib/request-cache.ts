@@ -78,25 +78,34 @@ class RequestCache {
     // Check for pending request first (deduplication)
     const pending = this.pendingRequests.get(key)
     if (pending && (now - pending.timestamp) < 30000) { // 30s timeout for pending
-      console.log(`🔄 Deduplicating request: ${functionName}`)
+      // PHASE 4D: Reduced console.log noise - only log in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`🔄 Deduplicating request: ${functionName}`)
+      }
       return pending.promise
     }
     
     // Check cache
     const cached = this.cache.get(key)
     if (cached && now < cached.expiresAt && !cached.isLoading) {
-      console.log(`✅ Cache hit: ${functionName}`, { 
-        data: functionName === 'getTreasuryStatus' ? cached.data : 'data',
-        age: Math.round((now - cached.timestamp) / 1000) + 's'
-      })
+      // PHASE 4D: Reduced console.log noise - only log in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`✅ Cache hit: ${functionName}`, { 
+          data: functionName === 'getTreasuryStatus' ? cached.data : 'data',
+          age: Math.round((now - cached.timestamp) / 1000) + 's'
+        })
+      }
       return cached.data
     }
     
     // Cache miss or expired - execute function
-    console.log(`🔄 Cache miss: ${functionName}`, { 
-      reason: !cached ? 'not_found' : 'expired',
-      ttl: Math.round(ttl / 1000) + 's'
-    })
+    // PHASE 4D: Only log cache misses in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`🔄 Cache miss: ${functionName}`, { 
+        reason: !cached ? 'not_found' : 'expired',
+        ttl: Math.round(ttl / 1000) + 's'
+      })
+    }
     
     const promise = fn()
     
@@ -119,25 +128,30 @@ class RequestCache {
         isLoading: false,
       })
       
-      // Log special cases
-      if (functionName === 'getTreasuryStatus') {
+      // PHASE 4D: Only log treasury data in development
+      if (process.env.NODE_ENV === 'development' && functionName === 'getTreasuryStatus') {
         console.log(`💰 Cached treasury data:`, result)
       }
       
-      console.log(`✅ Cached: ${functionName}`)
+      // PHASE 4D: Reduced console.log noise
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`✅ Cached: ${functionName}`)
+      }
+      
       return result
     } catch (error) {
-      console.error(`❌ Cache execution failed: ${functionName}`, error)
-      throw error
-    } finally {
-      // Clean up pending request
+      // Remove failed request from pending
       this.pendingRequests.delete(key)
       
-      // Clean up loading state
-      const entry = this.cache.get(key)
-      if (entry) {
-        entry.isLoading = false
+      // Mark as not loading
+      if (cached) {
+        cached.isLoading = false
       }
+      
+      throw error
+    } finally {
+      // Remove from pending requests
+      this.pendingRequests.delete(key)
     }
   }
 
@@ -239,4 +253,19 @@ export function invalidateTankCache(): void {
   requestCache.invalidate('getReservoirStatus')
   requestCache.invalidate('getTreasuryStatus')
   requestCache.invalidate('balanceOf')
+}
+
+/**
+ * Comprehensive cache invalidation for admin refresh operations
+ * This ensures fresh data from blockchain when admin clicks refresh
+ */
+export function invalidateAllFaucetCache(): void {
+  requestCache.invalidate('getReservoirStatus')
+  requestCache.invalidate('getTreasuryStatus')
+  requestCache.invalidate('COOLDOWN')
+  requestCache.invalidate('thresholdFactor')
+  requestCache.invalidate('balanceOf')
+  requestCache.invalidate('userMonBalance')
+  requestCache.invalidate('userLinkBalance')
+  console.log('🗑️ All faucet cache invalidated - next calls will hit blockchain')
 } 

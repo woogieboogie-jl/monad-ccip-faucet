@@ -1,5 +1,5 @@
 
-import { useState, useMemo, useCallback, useEffect } from "react"
+import { useMemo, useCallback, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -11,8 +11,13 @@ import { useTokenState, useVaultState, useUIState, useFaucetStore } from "@/stor
 import { useGlobalCCIP } from "@/hooks/use-global-ccip"
 import { useCCIPRefill } from "@/hooks/use-ccip-refill"
 import { useBatchOperations } from "@/hooks/use-batch-operations"
+import { useRequireMonad } from '@/hooks/use-require-monad'
+import { useAutoCooldownManager } from "@/hooks/use-cooldown-manager"
+import { getFaucetSnapshot } from "@/lib/faucetClient"
+import { formatEther } from "viem"
 import { Copy, ExternalLink, Fuel, TrendingUp, TrendingDown, Info, CheckCircle, AlertTriangle, Coins, Droplets, Check, Zap, RefreshCw, Shield } from "lucide-react"
 import { formatBalance } from "@/lib/utils"
+import { getCCIPPhaseText, getCCIPPhaseTooltip } from "@/lib/ccip-utils"
 
 
 interface WalletState {
@@ -32,6 +37,27 @@ interface FaucetSectionProps {
   setVolatilityUpdating: (updating: boolean) => void
 }
 
+/**
+ * FaucetSection - Main faucet interface component
+ * 
+ * PHASE 4D: Optimized with memoization and performance improvements
+ * 
+ * Features:
+ * - Dual-token faucet (MON/LINK) with dynamic drip amounts
+ * - Network validation and user guidance
+ * - CCIP-based cross-chain volatility updates
+ * - Gas-free transactions for new users
+ * - Real-time balance updates and cooldown management
+ * 
+ * Performance optimizations:
+ * - Memoized button state calculations
+ * - Optimized event handlers with useCallback
+ * - Selective Zustand subscriptions
+ * - Reduced console.log noise in production
+ * 
+ * @param props - Component props including wallet state and handlers
+ * @returns JSX element for the faucet interface
+ */
 export function FaucetSection({
   wallet,
   updateMonBalance,
@@ -60,47 +86,55 @@ export function FaucetSection({
   // Global CCIP state for backward compatibility (only used for legacy components)
   const { globalCCIP } = useGlobalCCIP()
   
-  // New CCIP refill hooks for each token
+  // PHASE 4A: CCIP refill hooks - moved out of useMemo to fix Rules of Hooks violation
   const monCCIPRefill = useCCIPRefill(
     "mon",
     monTokenState.tankBalance,
     monTokenState.maxTankBalance,
-    (volatilityMultiplier, refillAmount) => {
+    useCallback((volatilityMultiplier: number, refillAmount: number) => {
       updateGlobalVolatility(volatilityMultiplier)
       refillTankFromVault("mon", refillAmount)
-    }
+    }, [updateGlobalVolatility, refillTankFromVault])
   )
   
   const linkCCIPRefill = useCCIPRefill(
     "link", 
     linkTokenState.tankBalance,
     linkTokenState.maxTankBalance,
-    (volatilityMultiplier, refillAmount) => {
+    useCallback((volatilityMultiplier: number, refillAmount: number) => {
       updateGlobalVolatility(volatilityMultiplier)
       refillTankFromVault("link", refillAmount)
-    }
+    }, [updateGlobalVolatility, refillTankFromVault])
   )
   
-  // const [dripStates, setDripStates] = useState<{ mon: boolean; link: boolean }>({ mon: false, link: false })
-  // const [copiedAddresses, setCopiedAddresses] = useState<{ [key: string]: boolean }>({})
-
-  const copyToClipboard = (text: string) => {
+  // PHASE 4A: Memoize clipboard and explorer functions to prevent re-creation
+  const copyToClipboard = useCallback((text: string) => {
     navigator.clipboard.writeText(text)
     setCopiedAddress(text, true)
     setTimeout(() => {
       setCopiedAddress(text, false)
     }, 2000) // Reset after 2 seconds
-  }
+  }, [setCopiedAddress])
 
-  const openExplorer = (address: string) => {
+  const openExplorer = useCallback((address: string) => {
     window.open(`https://testnet.monadexplorer.com/address/${address}`, "_blank")
-  }
+  }, [])
 
-  const getDripButtonState = (tokenType: "mon" | "link") => {
+  // PHASE 4A: Memoize network check to prevent constant re-evaluation
+  const requireMonad = useRequireMonad()
+  const isCorrectNetwork = useMemo(() => requireMonad(), [requireMonad])
+
+  // PHASE 4A: Memoize expensive button state calculations
+  const getDripButtonState = useCallback((tokenType: "mon" | "link") => {
     const tokenState = tokenType === 'mon' ? monTokenState : linkTokenState
 
     if (!wallet.isConnected) {
       return { text: "Connect Wallet", disabled: true, isGasFree: false }
+    }
+
+    // Check network compatibility first - disable button if on wrong network
+    if (!isCorrectNetwork) {
+      return { text: "Wrong Network", disabled: true, isGasFree: false, wrongNetwork: true }
     }
 
     // Check if tank is empty or insufficient for drip (use Zustand store data)
@@ -132,11 +166,12 @@ export function FaucetSection({
     }
 
     return { text: "Drip", disabled: false, isGasFree: false }
-  }
+  }, [wallet.isConnected, wallet.monBalance, isCorrectNetwork, monTokenState, linkTokenState, formatCooldown])
 
-  const getFuelButtonState = (tokenType: "mon" | "link") => {
+  const getFuelButtonState = useCallback((tokenType: "mon" | "link") => {
     const tokenState = tokenType === 'mon' ? monTokenState : linkTokenState
     const ccipRefill = tokenType === "mon" ? monCCIPRefill : linkCCIPRefill
+    // Use memoized network check instead of calling requireMonad() again
     // Use vault balances from Zustand store (updated by fetchAllFaucetData)
     const vaultEmpty = tokenType === "mon" ? vaultBalances.mon === 0 : vaultBalances.link === 0
 
@@ -144,30 +179,51 @@ export function FaucetSection({
       return { text: "Connect Wallet", disabled: true, canRequest: false }
     }
 
-    // Check if any CCIP refill is active
-    if (ccipRefill.refillState.status === "tx_pending" || 
-        ccipRefill.refillState.status === "ccip_processing" ||
-        ccipRefill.refillState.status === "wallet_pending") {
-      return { text: "Refill in progress", disabled: true, canRequest: false }
+    // Check network compatibility first - disable button if on wrong network
+    if (!isCorrectNetwork) {
+      return { text: "Wrong Network", disabled: true, canRequest: false, wrongNetwork: true }
     }
 
-    // if vault is empty disable fuel request button
+    // CRITICAL FIX: Check for any active CCIP state first
+    if (ccipRefill.refillState.status === "wallet_pending") {
+      return { text: "Confirm in Wallet", disabled: true, canRequest: false }
+    }
+
+    if (ccipRefill.refillState.status === "tx_pending") {
+      return { text: "Transaction Pending", disabled: true, canRequest: false }
+    }
+
+    if (ccipRefill.refillState.status === "ccip_processing") {
+      return { text: "CCIP Processing", disabled: true, canRequest: false }
+    }
+
+    if (ccipRefill.refillState.status === "success") {
+      return { text: "Request Complete", disabled: true, canRequest: false }
+    }
+
+    if (ccipRefill.refillState.status === "failed") {
+      return { text: "Request Failed - Try Again", disabled: false, canRequest: true }
+    }
+
+    if (ccipRefill.refillState.status === "stuck") {
+      return { text: "Request Stuck - Try Again", disabled: false, canRequest: true }
+    }
+
     if (vaultEmpty) {
       return { text: "Vault is Empty", disabled: true, canRequest: false }
     }
 
-    // FIXED: Use Zustand store for cooldown check instead of local state
     if (tokenState.requestCooldownTime > 0) {
       return { text: formatCooldown(tokenState.requestCooldownTime), disabled: true, canRequest: false }
     }
 
-    const isBelowThreshold = isTankLow(tokenType)
+    const isBelowThreshold = tokenState.tankBalance <= tokenState.lowTankThreshold
     return {
       text: isBelowThreshold ? "Request Volatility & Refill" : "Tank Above Threshold",
       disabled: !isBelowThreshold,
       canRequest: isBelowThreshold,
     }
-  }
+  }, [wallet.isConnected, isCorrectNetwork, monTokenState, linkTokenState, monCCIPRefill, linkCCIPRefill, vaultBalances, formatCooldown])
 
   // Memoized values to prevent flickering - use boolean states instead of exact countdown values
   const anyRequestActive = useMemo(() => 
@@ -176,142 +232,28 @@ export function FaucetSection({
     linkCCIPRefill.refillState.status === "tx_pending" || 
     linkCCIPRefill.refillState.status === "ccip_processing"
   , [monCCIPRefill.refillState.status, linkCCIPRefill.refillState.status])
-  
-  // Stable boolean states for cooldowns (only change when cooldown starts/ends, not every second)
-  const monDripOnCooldown = useMemo(() => monTokenState.dripCooldownTime > 0, [monTokenState.dripCooldownTime > 0])
-  const linkDripOnCooldown = useMemo(() => linkTokenState.dripCooldownTime > 0, [linkTokenState.dripCooldownTime > 0])
-  const monRequestOnCooldown = useMemo(() => monTokenState.requestCooldownTime > 0, [monTokenState.requestCooldownTime > 0])
-  const linkRequestOnCooldown = useMemo(() => linkTokenState.requestCooldownTime > 0, [linkTokenState.requestCooldownTime > 0])
-  
-  // Memoized formatCooldown results to prevent constant string generation - FIXED: Use Zustand store
-  const monDripCooldownText = useMemo(() => formatCooldown(monTokenState.dripCooldownTime), [Math.floor(monTokenState.dripCooldownTime / 5)]) // Update every 5 seconds
-  const linkDripCooldownText = useMemo(() => formatCooldown(linkTokenState.dripCooldownTime), [Math.floor(linkTokenState.dripCooldownTime / 5)])
-  const monRequestCooldownText = useMemo(() => formatCooldown(monTokenState.requestCooldownTime), [Math.floor(monTokenState.requestCooldownTime / 5)])
-  const linkRequestCooldownText = useMemo(() => formatCooldown(linkTokenState.requestCooldownTime), [Math.floor(linkTokenState.requestCooldownTime / 5)])
-  
-  // Memoized button states with precise dependencies
-  const monDripButtonState = useMemo(() => {
-    if (!wallet.isConnected) {
-      return { text: "Connect Wallet", disabled: true, isGasFree: false }
-    }
 
-    if (monTokenState.tankBalance <= 0) {
-      return { text: "Tank Empty - Use Refuel", disabled: true, isGasFree: false, isEmpty: true }
-    }
-    
-    if (monTokenState.tankBalance < monTokenState.currentDripAmount) {
-      return { 
-        text: `Insufficient Tank (${formatBalance(monTokenState.tankBalance)} < ${formatBalance(monTokenState.currentDripAmount)})`, 
-        disabled: true, 
-        isGasFree: false, 
-        isEmpty: true 
-      }
-    }
+  // PHASE 4A: Memoize button states to prevent expensive recalculations
+  const monDripButtonState = useMemo(() => getDripButtonState("mon"), [getDripButtonState])
+  const linkDripButtonState = useMemo(() => getDripButtonState("link"), [getDripButtonState])
+  const monFuelButtonState = useMemo(() => getFuelButtonState("mon"), [getFuelButtonState])
+  const linkFuelButtonState = useMemo(() => getFuelButtonState("link"), [getFuelButtonState])
 
-    if (wallet.monBalance === 0) {
-      return { text: "Get First MON (Gas-Free)", disabled: false, isGasFree: true }
-    }
-
-    if (monTokenState.isDripLoading) {
-      return { text: "Dripping...", disabled: true, loading: true, isGasFree: false }
-    }
-
-    if (monDripOnCooldown) {
-      return { text: monDripCooldownText, disabled: true, isGasFree: false }
-    }
-
-    return { text: "Drip", disabled: false, isGasFree: false }
-  }, [wallet.isConnected, wallet.monBalance, monTokenState.tankBalance, monTokenState.currentDripAmount, monTokenState.isDripLoading, monDripOnCooldown, monDripCooldownText])
-
-  const linkDripButtonState = useMemo(() => {
-    if (!wallet.isConnected) {
-      return { text: "Connect Wallet", disabled: true, isGasFree: false }
-    }
-
-    if (linkTokenState.tankBalance <= 0) {
-      return { text: "Tank Empty - Use Refuel", disabled: true, isGasFree: false, isEmpty: true }
-    }
-    
-    if (linkTokenState.tankBalance < linkTokenState.currentDripAmount) {
-      return { 
-        text: `Insufficient Tank (${formatBalance(linkTokenState.tankBalance)} < ${formatBalance(linkTokenState.currentDripAmount)})`, 
-        disabled: true, 
-        isGasFree: false, 
-        isEmpty: true 
-      }
-    }
-
-    if (linkTokenState.isDripLoading) {
-      return { text: "Dripping...", disabled: true, loading: true, isGasFree: false }
-    }
-
-    if (linkDripOnCooldown) {
-      return { text: linkDripCooldownText, disabled: true, isGasFree: false }
-    }
-
-    return { text: "Drip", disabled: false, isGasFree: false }
-  }, [wallet.isConnected, linkTokenState.tankBalance, linkTokenState.currentDripAmount, linkTokenState.isDripLoading, linkDripOnCooldown, linkDripCooldownText])
-
-  const monFuelButtonState = useMemo(() => {
-    if (!wallet.isConnected) {
-      return { text: "Connect Wallet", disabled: true, canRequest: false }
-    }
-
-    if (anyRequestActive) {
-      return { text: "Refill in progress", disabled: true, canRequest: false }
-    }
-
-    if (vaultBalances.mon === 0){
-      return { text: "Vault is Empty", disabled: true, canRequest: false }
-    }
-
-    if (monRequestOnCooldown) {
-      return { text: monRequestCooldownText, disabled: true, canRequest: false }
-    }
-
-    const isBelowThreshold = monTokenState.tankBalance <= monTokenState.lowTankThreshold
-    return {
-      text: isBelowThreshold ? "Request Volatility & Refill" : "Tank Above Threshold",
-      disabled: !isBelowThreshold,
-      canRequest: isBelowThreshold,
-    }
-  }, [wallet.isConnected, anyRequestActive, vaultBalances.mon, monRequestOnCooldown, monRequestCooldownText, monTokenState.tankBalance, monTokenState.lowTankThreshold])
-
-  const linkFuelButtonState = useMemo(() => {
-    if (!wallet.isConnected) {
-      return { text: "Connect Wallet", disabled: true, canRequest: false }
-    }
-
-    if (anyRequestActive) {
-      return { text: "Refill in progress", disabled: true, canRequest: false }
-    }
-
-    if (vaultBalances.link === 0){
-      return { text: "Vault is Empty", disabled: true, canRequest: false }
-    }
-
-    if (linkRequestOnCooldown) {
-      return { text: linkRequestCooldownText, disabled: true, canRequest: false }
-    }
-
-    const isBelowThreshold = linkTokenState.tankBalance <= linkTokenState.lowTankThreshold
-    return {
-      text: isBelowThreshold ? "Request Volatility & Refill" : "Tank Above Threshold",
-      disabled: !isBelowThreshold,
-      canRequest: isBelowThreshold,
-    }
-  }, [wallet.isConnected, anyRequestActive, vaultBalances.link, linkRequestOnCooldown, linkRequestCooldownText, linkTokenState.tankBalance, linkTokenState.lowTankThreshold])
-
-  // Enhanced drip action with useCallback to prevent re-renders
+  // PHASE 4A: Memoize event handlers to prevent re-creation
   const handleMonDrip = useCallback(() => {
+    console.log('[handleMonDrip] called')
     if (monDripButtonState.isGasFree) {
       setGasFreeModalOpen(true)
     } else {
       dripTokens("mon")
     }
-  }, [monDripButtonState.isGasFree, dripTokens, setGasFreeModalOpen])
+  }, [monDripButtonState.isGasFree, setGasFreeModalOpen, dripTokens])
 
-  const handleFuelButtonClick = (tokenType: "mon" | "link") => {
+  const handleLinkDrip = useCallback(() => {
+    dripTokens("link")
+  }, [dripTokens])
+
+  const handleFuelButtonClick = useCallback((tokenType: "mon" | "link") => {
     setVolatilityUpdating(true)
     
     // Use the new CCIP refill hooks
@@ -320,16 +262,48 @@ export function FaucetSection({
     } else {
       linkCCIPRefill.triggerUniversalVolatilityAndRefill()
     }
-  }
+  }, [setVolatilityUpdating, monCCIPRefill, linkCCIPRefill])
 
-  const handleGasFreeSuccess = () => {
-    // Update the UI balance - the AA transaction already sent the tokens
+  const { setDripCooldown } = useAutoCooldownManager()
+
+  // PHASE 4A: Memoize gas-free success handler
+  const handleGasFreeSuccess = useCallback(async () => {
+    // 1) Optimistically bump wallet balance in parent component
     updateMonBalance(faucet.mon.currentDripAmount)
+
+    // 2) REMOVED: Optimistic tank balance update - instead show refreshing state
+    const { updateTokenState } = useFaucetStore.getState()
     
-    // Just refresh the faucet state to get updated cooldowns and tank balance
-    // Don't call dripTokens() again since the AA UserOperation already did the drip
-    // The refreshMonBalance in HomePage will fetch the real balance from blockchain
-  }
+    updateTokenState('mon', { 
+      isRefreshing: true  // Show spinner while refreshing tank balance
+    })
+
+    try {
+      // 3) Read on-chain cooldown so we avoid hard-coding any value
+      const snap = await getFaucetSnapshot(wallet.address as `0x${string}` | undefined)
+      const contractCooldown = snap.constants.cooldown // seconds
+
+      // 4) Start local countdown timer via centralized cooldown manager
+      setDripCooldown('mon', contractCooldown)
+      
+      // 5) FIXED: Immediately refresh tank balance from contract (no optimistic update)
+      try {
+        const freshSnap = await getFaucetSnapshot(wallet.address as `0x${string}` | undefined)
+        const freshTankBalance = Number(formatEther(freshSnap.mon.pool))
+        
+        updateTokenState('mon', { 
+          tankBalance: freshTankBalance,
+          isRefreshing: false  // Remove refreshing state
+        })
+      } catch (refreshError) {
+        console.error('Failed to refresh tank balance:', refreshError)
+        updateTokenState('mon', { isRefreshing: false })
+      }
+    } catch (e) {
+      console.warn('Gas-free handler: failed to fetch snapshot for cooldown, will rely on periodic refresh', e)
+      updateTokenState('mon', { isRefreshing: false })
+    }
+  }, [updateMonBalance, faucet.mon.currentDripAmount, wallet.address, setDripCooldown])
 
   const formatTimeAgo = (date: Date) => {
     const now = new Date()
@@ -342,48 +316,6 @@ export function FaucetSection({
     return `${diffInHours} hours ago`
   }
 
-  const getCCIPPhaseText = (phase?: string) => {
-    switch (phase) {
-      case "wallet_confirm":
-        return "⚡ Wallet confirmation..."
-      case "monad_confirm":
-        return "🔗 CCIP Transaction sent..."
-      case "ccip_pending":
-        return "🌐 CCIP transaction pending..."
-      case "ccip_confirmed":
-        return "📡 CCIP transaction confirmed on Monad..."
-      case "avalanche_confirm":
-        return "⌛ Waiting for finality from Monad..."
-      case "ccip_response":
-        return "📡 Waiting for finality from Avalanche..."
-      case "monad_refill":
-        return "🔄 Refilling tank..."
-      default:
-        return "Processing..."
-    }
-  }
-
-  const getCCIPPhaseTooltip = (phase?: string) => {
-    switch (phase) {
-      case "wallet_confirm":
-        return "Waiting for wallet confirmation"
-      case "monad_confirm":
-        return "Transaction submitted to Monad - waiting for confirmation"
-      case "ccip_pending":
-        return "CCIP message pending - cross-chain request initiated"
-      case "ccip_confirmed":
-        return "CCIP message confirmed - waiting for finality from Monad"
-      case "avalanche_confirm":
-        return "Volatility data request received from Monad"
-      case "ccip_response":
-        return "Waiting for Avalanche → Monad CCIP response (finality)"
-      case "monad_refill":
-        return "Refilling tank from vault based on volatility data"
-      default:
-        return "Processing cross-chain volatility request"
-    }
-  }
-
   // Enhanced drip action with better animation
   const handleDripWithAnimation = (tokenType: "mon" | "link") => {
     // Trigger the enhanced animation
@@ -393,7 +325,7 @@ export function FaucetSection({
     if (tokenType === "mon") {
       handleMonDrip()
     } else {
-      dripTokens(tokenType)
+      handleLinkDrip()
     }
     
     // Reset animation state after completion
@@ -593,7 +525,7 @@ export function FaucetSection({
                         className={`group w-full flex items-center justify-between px-3 py-2 rounded-lg gap-3 font-body cta-enhanced transition-all duration-200 border-2 ${
                           dripButtonState.disabled
                             ? "bg-white/5 border-white/20 text-white/40 cursor-not-allowed opacity-50"
-                            : "bg-gradient-to-r from-blue-500/20 to-cyan-500/20 text-blue-300 hover:from-blue-500/30 hover:to-cyan-500/30 hover:text-blue-200 border-blue-500/40 hover:border-blue-400/60"
+                            : "bg-blue-500/20 to-cyan-500/20 text-blue-300 hover:from-blue-500/30 hover:to-cyan-500/30 hover:text-blue-200 border-blue-500/40 hover:border-blue-400/60"
                         }`}
                       >
                         <div className="flex items-center space-x-2">
@@ -616,7 +548,9 @@ export function FaucetSection({
                     </TooltipTrigger>
                     <TooltipContent className="z-[9999]" side="top" sideOffset={5}>
                       <p className="font-body text-xs">
-                        {dripButtonState.isEmpty 
+                        {(dripButtonState as any).wrongNetwork 
+                          ? "Please switch to Monad Testnet to use the faucet" 
+                          : (dripButtonState as any).isEmpty 
                           ? "Tank is empty or insufficient - use Refuel button below to fill from vault" 
                           : "Get tokens from the tank sent to your wallet"
                         }
@@ -632,9 +566,14 @@ export function FaucetSection({
               {/* Tank Balance */}
               <div className="flex items-center justify-between">
                 <span className="font-body text-white/70 text-xs font-medium">Tank Balance:</span>
-                <span className="font-body text-white text-xs font-semibold">
-                  {formatBalance(faucet[tokenType].tankBalance)} {symbol}
-                </span>
+                <div className="flex items-center space-x-2">
+                  <span className="font-body text-white text-xs font-semibold">
+                    {formatBalance(faucet[tokenType].tankBalance)} {symbol}
+                  </span>
+                  {tokenState.isRefreshing && (
+                    <div className="animate-spin h-3 w-3 border border-white/40 border-t-white rounded-full" />
+                  )}
+                </div>
               </div>
 
               {/* Status with Threshold in Tooltip */}
@@ -813,29 +752,48 @@ export function FaucetSection({
               {ccipRefill.refillState.status === "success" && (
                 <div className="bg-green-500/10 border border-green-400/30 rounded p-2 space-y-1">
                   <div className="flex items-center justify-between">
-                    <p className="font-body text-green-400 text-xs font-medium">✅ CCIP Volatility Complete</p>
-                    {ccipRefill.refillState.ccipMessageId && (
+                    <p className="font-body text-green-400 text-xs font-medium">✅ CCIP Volatility Request Complete</p>
+                    <div className="flex items-center space-x-2">
+                      {ccipRefill.refillState.ccipMessageId && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={() => ccipRefill.openCCIPExplorer(ccipRefill.refillState.ccipMessageId!)}
+                              className="p-1 hover:bg-white/10 rounded transition-colors"
+                            >
+                              <ExternalLink className="h-3 w-3 text-green-300 hover:text-green-200" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent className="z-[9999]" side="top" sideOffset={5}>
+                            <p className="font-body text-xs">View completed CCIP transaction</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
-                            onClick={() => ccipRefill.openCCIPExplorer(ccipRefill.refillState.ccipMessageId!)}
+                            onClick={() => ccipRefill.resetToIdle()}
                             className="p-1 hover:bg-white/10 rounded transition-colors"
                           >
-                            <ExternalLink className="h-3 w-3 text-green-300 hover:text-green-200" />
+                            <span className="text-green-300 hover:text-green-200 text-xs">✕</span>
                           </button>
                         </TooltipTrigger>
                         <TooltipContent className="z-[9999]" side="top" sideOffset={5}>
-                          <p className="font-body text-xs">View completed CCIP transaction</p>
+                          <p className="font-body text-xs">Dismiss success message</p>
                         </TooltipContent>
                       </Tooltip>
-                    )}
+                    </div>
                   </div>
                   <p className="font-body text-green-300 text-xs">
                     Market Volatility: {ccipRefill.refillState.volatilityData?.score || 0}/100 ({ccipRefill.refillState.volatilityData?.trend || "stable"})
                   </p>
                   <p className="font-body text-green-200 text-xs">
-                    Drip adjusted: {tokenState.baseDripAmount} → {ccipRefill.refillState.newDripAmount} {symbol} 
-                    ({ccipRefill.refillState.newDripAmount && ccipRefill.refillState.newDripAmount > tokenState.baseDripAmount ? '+' : ''}{((ccipRefill.refillState.newDripAmount || tokenState.baseDripAmount) / tokenState.baseDripAmount * 100 - 100).toFixed(0)}%)
+                    Drip adjusted: {tokenState.baseDripAmount} → {ccipRefill.refillState.newDripAmount || tokenState.currentDripAmount} {symbol}
+                    ({ccipRefill.refillState.newDripAmount ? 
+                      (ccipRefill.refillState.newDripAmount > tokenState.baseDripAmount ? '+' : '') +
+                      Math.round(((ccipRefill.refillState.newDripAmount / tokenState.baseDripAmount) - 1) * 100) + '%'
+                      : '0%'
+                    })
                   </p>
                   <p className="font-body text-green-200 text-xs">
                     Tank refilled: +{ccipRefill.refillState.refillAmount?.toLocaleString() || 0} {symbol}

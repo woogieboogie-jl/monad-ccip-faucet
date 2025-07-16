@@ -6,18 +6,14 @@ import { VolatilityCard } from '@/components/volatility/VolatilityCard'
 import { VaultStatus } from '@/components/vault-status'
 import { CollapsibleSection } from '@/components/collapsible-section'
 import { TokenRain } from '@/components/token-rain'
-import { NetworkSwitchModal } from '@/components/network-switch-modal'
 // CONSOLIDATION: Use Zustand volatility state instead of useVolatility hook
 import { useVolatilityData, useVolatilityUtils } from '@/store/faucet-store'
-import { useNetworkSwitch } from '@/hooks/use-network-switch'
+import { useFaucetOwner } from '@/hooks/use-faucet-owner'
 import { Activity, Vault } from 'lucide-react'
 import { publicClient } from '@/lib/viem'
 import { formatEther, parseAbi } from 'viem'
 import { LINK_TOKEN_ADDRESS } from '@/lib/addresses'
 import { cachedContractRead } from '@/lib/request-cache'
-
-// Mock owner address for demo
-const OWNER_ADDRESS = "0x1234567890123456789012345678901234567890"
 
 export function HomePage() {
   const { address, isConnected } = useAccount()
@@ -26,6 +22,9 @@ export function HomePage() {
   const [monBalance, setMonBalance] = useState(0)
   const [linkBalance, setLinkBalance] = useState(0)
   const [isDemoMode, setIsDemoMode] = useState(true) // For easy vault access
+  
+  // Get the real owner from the contract
+  const { owner: contractOwner, isLoading: isOwnerLoading } = useFaucetOwner()
   
   // CONSOLIDATION: Use Zustand volatility state instead of useVolatility hook
   const { volatility, isLoading: isVolatilityLoading } = useVolatilityData()
@@ -38,35 +37,22 @@ export function HomePage() {
   } = useVolatilityUtils()
   
   // Network switching functionality
-  const {
-    isWrongNetwork,
-    isNetworkModalOpen,
-    isSwitching,
-    switchError,
-    currentNetworkName,
-    targetNetworkName,
-    handleSwitchNetwork,
-    closeNetworkModal,
-  } = useNetworkSwitch()
   
   // Mock fetchVolatilityData for backward compatibility (not used in current flow)
   const fetchVolatilityData = async () => {
     // This function is not used in the current flow since volatility updates come from CCIP
-    console.log('fetchVolatilityData called - volatility updates now come from CCIP responses')
   }
 
   // Fetch real MON and LINK balances from blockchain when wallet connects
   useEffect(() => {
     const fetchBalances = async () => {
       if (!address || !isConnected) {
-        console.log('HomePage: No address or not connected, setting balances to 0')
         setMonBalance(0)
         setLinkBalance(0)
         return
       }
 
       try {
-        console.log('HomePage: Fetching balances for address:', address)
         
         const linkTokenAbi = parseAbi(['function balanceOf(address) view returns (uint256)'])
 
@@ -111,10 +97,22 @@ export function HomePage() {
   const walletState = {
     address: address || null,
     isConnected,
-    isOwner: isDemoMode ? isConnected : address?.toLowerCase() === OWNER_ADDRESS.toLowerCase(),
+    isOwner: address?.toLowerCase() === contractOwner?.toLowerCase(),
     monBalance,
     linkBalance,
   }
+
+  // Debug logging for owner detection
+  useEffect(() => {
+    if (contractOwner && address) {
+      console.log('🔐 Owner Detection:', {
+        contractOwner,
+        connectedAddress: address,
+        isOwner: address?.toLowerCase() === contractOwner?.toLowerCase(),
+        isOwnerLoading
+      })
+    }
+  }, [contractOwner, address, isOwnerLoading])
 
   const updateMonBalance = (newBalance: number) => {
     setMonBalance(newBalance)
@@ -252,16 +250,6 @@ export function HomePage() {
         )}
       </main>
       
-      {/* Network Switch Modal */}
-      <NetworkSwitchModal
-        isOpen={isNetworkModalOpen}
-        onClose={closeNetworkModal}
-        onSwitchNetwork={handleSwitchNetwork}
-        currentNetworkName={currentNetworkName}
-        targetNetworkName={targetNetworkName}
-        isSwitching={isSwitching}
-        switchError={switchError}
-      />
     </div>
   )
 } 

@@ -1,18 +1,21 @@
 
 
 import { useState, useEffect } from "react"
+import { VolatilityData } from '@/lib/types'
 
-interface VolatilityData {
-  score: number // 1-100
-  trend: "increasing" | "decreasing" | "stable"
+// CONSOLIDATION: Use unified VolatilityData interface from types.ts
+// Local interface for additional fields specific to this hook
+interface VolatilityHookData extends VolatilityData {
   lastUpdate: Date
   source: string
 }
 
 export function useVolatility() {
-  const [volatility, setVolatility] = useState<VolatilityData>({
+  const [volatility, setVolatility] = useState<VolatilityHookData>({
     score: 45, // Start with moderate volatility
     trend: "stable",
+    multiplier: 1.0, // Added from unified interface
+    refillDecision: 0, // Added from unified interface
     lastUpdate: new Date(),
     source: "BTC-based Crypto",
   })
@@ -36,6 +39,8 @@ export function useVolatility() {
       setVolatility({
         score: newScore,
         trend,
+        multiplier: 1.0 + (newScore - 50) / 100, // Calculate multiplier based on score
+        refillDecision: newScore > 70 ? 1 : 0, // Simple refill decision logic
         lastUpdate: new Date(),
         source: "BTC-based Crypto",
       })
@@ -102,6 +107,8 @@ export function useVolatility() {
     setVolatility({
       score: Math.max(1, Math.min(100, newScore)), // Clamp between 1-100
       trend,
+      multiplier: 1.0 + (newScore - 50) / 100, // Calculate multiplier based on score
+      refillDecision: newScore > 70 ? 1 : 0, // Simple refill decision logic
       lastUpdate: new Date(),
       source: "BTC-based Crypto",
     })

@@ -4,25 +4,13 @@
 import { publicClient } from '@/lib/viem'
 import { FAUCET_ADDRESS } from '@/lib/addresses'
 import { parseAbi, Log } from 'viem'
+import { CCIPMonitorConfig, CCIPMonitoringState } from '@/lib/types'
 
-interface CCIPMonitorConfig {
-  messageId: string
-  tokenType: 'mon' | 'link'
-  currentPhase: string
-  onPhaseUpdate: (phase: string, progress: number, data?: any) => void
-  onComplete: (result: any) => void
-  onError: (error: string) => void
-}
-
-interface MonitoringState {
-  isActive: boolean
-  lastBlockChecked: bigint
-  failureCount: number
-  nextCheckTime: number
-}
+// CONSOLIDATION: Use unified interfaces from types.ts
+// This replaces the local interface definitions
 
 class SmartCCIPMonitor {
-  private monitors = new Map<string, MonitoringState>()
+  private monitors = new Map<string, CCIPMonitoringState>()
   private blockSubscription: any = null
   private isListening = false
 
@@ -142,7 +130,7 @@ class SmartCCIPMonitor {
     tokenType: 'mon' | 'link',
     messageId: string,
     logs: Log[],
-    state: MonitoringState
+    state: CCIPMonitoringState
   ): Promise<void> {
     // Check for CCIP-related events in logs
     const ccipEvents = logs.filter(log => 

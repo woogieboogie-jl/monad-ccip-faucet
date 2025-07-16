@@ -7,32 +7,11 @@ import { useWalletClient } from 'wagmi'
 import { useAutoCooldownManager } from '@/hooks/use-cooldown-manager'
 import { useFaucetStore, useTokenState, useVaultState, useVolatilityState } from '@/store/faucet-store'
 import { useBatchOperations } from '@/hooks/use-batch-operations'
+import { useRequireMonad } from '@/hooks/use-require-monad'
+import { TokenState, FaucetState, GlobalVolatilityState } from '@/lib/types'
 
-interface TokenState {
-  tankBalance: number // Per-asset tank (available for dripping)
-  maxTankBalance: number // Max tank capacity per asset
-  baseDripAmount: number // Base drip amount before volatility adjustment
-  currentDripAmount: number // Current drip amount (adjusted by volatility)
-  dripCooldownTime: number
-  requestCooldownTime: number // Cooldown for fuel button (cross-chain request)
-  isDripLoading: boolean
-  isRequestLoading: boolean
-  contractAddress: string
-  lowTankThreshold: number // When to show fuel button
-}
-
-interface FaucetState {
-  mon: TokenState
-  link: TokenState
-  vaultMon: number // MON vault reserves
-  vaultLink: number // LINK vault reserves
-}
-
-interface GlobalVolatilityState {
-  multiplier: number
-  lastUpdated: Date
-  isUpdating: boolean
-}
+// CONSOLIDATION: Use unified interfaces from types.ts
+// Removed duplicate interfaces: TokenState, FaucetState, GlobalVolatilityState
 
 export function useFaucet() {
   // CONSOLIDATION: Read from Zustand store instead of maintaining local state
@@ -52,6 +31,7 @@ export function useFaucet() {
       requestCooldownTime: monTokenState.requestCooldownTime,
       isDripLoading: monTokenState.isDripLoading,
       isRequestLoading: monTokenState.isRequestLoading,
+      isRefreshing: monTokenState.isRefreshing,
       contractAddress: monTokenState.contractAddress,
       lowTankThreshold: monTokenState.lowTankThreshold,
     },
@@ -64,6 +44,7 @@ export function useFaucet() {
       requestCooldownTime: linkTokenState.requestCooldownTime,
       isDripLoading: linkTokenState.isDripLoading,
       isRequestLoading: linkTokenState.isRequestLoading,
+      isRefreshing: linkTokenState.isRefreshing,
       contractAddress: linkTokenState.contractAddress,
       lowTankThreshold: linkTokenState.lowTankThreshold,
     },
@@ -92,6 +73,10 @@ export function useFaucet() {
       const monDripNum  = Number(formatEther(snap.mon.drip))
       const linkPoolNum = Number(formatEther(snap.link.pool))
       const linkDripNum = Number(formatEther(snap.link.drip))
+
+      // New: derive on-chain reservoir capacities for accurate UI max values
+      const monCapNum  = Number(formatEther(snap.mon.capacity))
+      const linkCapNum = Number(formatEther(snap.link.capacity))
 
       const threshFactorNum = snap.constants.thresholdFactor
 
@@ -128,7 +113,7 @@ export function useFaucet() {
         lowTankThreshold: monDripNum * threshFactorNum,
         dripCooldownTime: remainingMon,
         contractAddress: MON_TOKEN_ADDRESS ?? '',
-        maxTankBalance: monTokenState.maxTankBalance || 500, // Preserve existing or default
+        maxTankBalance: monCapNum,
       })
 
       updateTokenState('link', {
@@ -138,18 +123,10 @@ export function useFaucet() {
         lowTankThreshold: linkDripNum * threshFactorNum,
         dripCooldownTime: remainingLink,
         contractAddress: LINK_TOKEN_ADDRESS ?? FAUCET_ADDRESS,
-        maxTankBalance: linkTokenState.maxTankBalance || 500, // Preserve existing or default
+        maxTankBalance: linkCapNum,
       })
 
-      console.log('📊 Snapshot refreshed with contract-based base drip rates:', {
-        monBase: monBaseDripNum,
-        monCurrent: monDripNum,
-        monMultiplier: monMultiplier.toFixed(2),
-        linkBase: linkBaseDripNum,
-        linkCurrent: linkDripNum,
-        linkMultiplier: linkMultiplier.toFixed(2),
-        globalMultiplier: globalMultiplier.toFixed(2),
-      })
+      // Snapshot refreshed with contract-based base drip rates
     } catch (error) {
       console.error('Failed to refresh snapshot:', error)
     }
@@ -170,7 +147,10 @@ export function useFaucet() {
   // ------------------------------------------------------------
   // Drip tokens (on-chain call)
   // ------------------------------------------------------------
+  const requireMonad = useRequireMonad()
+
   const dripTokens = async (tokenType: "mon" | "link") => {
+    if (!requireMonad()) return
     if (!walletClient) return
     
     // FIXED: Check cooldown from Zustand store instead of local state
@@ -200,16 +180,38 @@ export function useFaucet() {
       const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
       
       if (receipt.status === 'success') {
-        updateTokenState(tokenType, { isDripLoading: false })
+        // REMOVED: Optimistic tank balance update - instead show refreshing state
+        updateTokenState(tokenType, { 
+          isDripLoading: false,
+          isRefreshing: true  // Add refreshing state to show spinner
+        })
         
         // FIXED: Get the actual contract cooldown duration instead of hardcoded value
         const snap = await getFaucetSnapshot(walletClient.account.address)
         const contractCooldown = snap.constants.cooldown // This is the actual COOLDOWN from contract
         
-        console.log(`✅ Drip successful! Using contract cooldown: ${contractCooldown}s (${Math.floor(contractCooldown/60)} minutes)`)
+        // Drip successful! Refreshing tank balance from contract
         
         // OPTIMIZED: Use centralized cooldown system with correct contract duration
         setDripCooldown(tokenType, contractCooldown)
+        
+        // FIXED: Immediately refresh tank balance from contract (no optimistic update)
+        try {
+          const freshSnap = await getFaucetSnapshot(walletClient.account.address)
+          const freshTankBalance = tokenType === 'mon' 
+            ? Number(formatEther(freshSnap.mon.pool))
+            : Number(formatEther(freshSnap.link.pool))
+          
+          updateTokenState(tokenType, { 
+            tankBalance: freshTankBalance,
+            isRefreshing: false  // Remove refreshing state
+          })
+          
+          // Tank balance refreshed from contract
+        } catch (refreshError) {
+          console.error('Failed to refresh tank balance:', refreshError)
+          updateTokenState(tokenType, { isRefreshing: false })
+        }
       }
     } catch (err) {
       console.error('Drip failed', err)
@@ -289,6 +291,16 @@ export function useFaucet() {
     }
   }
 
+  // Force refresh tank balances from contract (bypasses optimistic update protection)
+  const forceRefreshTankBalances = async () => {
+    try {
+      await refreshSnapshot(walletClient?.account.address as `0x${string}` | undefined)
+      // Tank balances force refreshed from contract
+    } catch (error) {
+      console.error('Failed to force refresh tank balances:', error)
+    }
+  }
+
   // 🚀 Initial vault balance fetch
   useEffect(() => {
     fetchAllFaucetData()
@@ -315,5 +327,6 @@ export function useFaucet() {
     formatCooldown,
     isTankLow,
     refreshVaultBalances, // ✅ New function for manual refresh
+    forceRefreshTankBalances, // ✅ Force refresh tank balances from contract
   }
 }
